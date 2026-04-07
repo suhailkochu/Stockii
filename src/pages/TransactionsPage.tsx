@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { useAuth, useTenancy } from '../contexts';
+import { useTenancy } from '../contexts';
 import { inventoryService } from '../services/inventoryService';
 import { InventoryTransaction, Item, InventoryLocation } from '../types';
 import { Search, Filter, ArrowUpRight, ArrowDownLeft, RefreshCw, AlertTriangle, Package } from 'lucide-react';
@@ -10,6 +10,7 @@ export default function TransactionsPage() {
   const [items, setItems] = useState<Item[]>([]);
   const [locations, setLocations] = useState<InventoryLocation[]>([]);
   const [loading, setLoading] = useState(true);
+  const [searchTerm, setSearchTerm] = useState('');
 
   useEffect(() => {
     if (currentOrg) {
@@ -49,6 +50,41 @@ export default function TransactionsPage() {
     return type.replace(/_/g, ' ');
   };
 
+  const getSignedQuantity = (tx: InventoryTransaction) => {
+    switch (tx.type) {
+      case 'SALE_OUT':
+      case 'DAMAGE_OUT':
+      case 'ADJUSTMENT_OUT':
+        return -tx.quantity;
+      case 'PURCHASE_IN':
+      case 'CUSTOMER_RETURN':
+      case 'ADJUSTMENT_IN':
+        return tx.quantity;
+      default:
+        return tx.quantity;
+    }
+  };
+
+  const getLocationName = (locationId?: string) => {
+    if (!locationId) return '-';
+    return locations.find(location => location.id === locationId)?.name || 'Unknown Location';
+  };
+
+  const filteredTransactions = transactions.filter(tx => {
+    const item = items.find(entry => entry.id === tx.itemId);
+    const haystack = [
+      tx.type,
+      tx.referenceId || '',
+      tx.notes || '',
+      item?.name || '',
+      item?.sku || '',
+      getLocationName(tx.sourceLocationId),
+      getLocationName(tx.destinationLocationId),
+    ].join(' ').toLowerCase();
+
+    return haystack.includes(searchTerm.toLowerCase());
+  });
+
   if (loading) return <div className="p-8 text-center">Loading transactions...</div>;
 
   return (
@@ -60,6 +96,23 @@ export default function TransactionsPage() {
         </div>
       </header>
 
+      <div className="flex flex-col sm:flex-row gap-4">
+        <div className="relative flex-1">
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-zinc-400" />
+          <input
+            type="text"
+            value={searchTerm}
+            onChange={(e) => setSearchTerm(e.target.value)}
+            placeholder="Search by item, reference, notes, or location..."
+            className="w-full pl-10 pr-4 py-2 bg-white border border-zinc-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-orange-500/20 focus:border-orange-500 transition-all"
+          />
+        </div>
+        <div className="flex items-center gap-2 px-4 py-2 bg-white border border-zinc-200 rounded-xl text-sm text-zinc-600">
+          <Filter className="w-4 h-4" />
+          {filteredTransactions.length} entries
+        </div>
+      </div>
+
       <div className="bg-white border border-zinc-200 rounded-2xl overflow-hidden shadow-sm">
         <div className="overflow-x-auto">
           <table className="w-full text-left border-collapse">
@@ -69,19 +122,21 @@ export default function TransactionsPage() {
                 <th className="px-6 py-4 text-xs font-mono uppercase tracking-wider text-zinc-400">Type</th>
                 <th className="px-6 py-4 text-xs font-mono uppercase tracking-wider text-zinc-400">Item</th>
                 <th className="px-6 py-4 text-xs font-mono uppercase tracking-wider text-zinc-400 text-right">Quantity</th>
+                <th className="px-6 py-4 text-xs font-mono uppercase tracking-wider text-zinc-400">Locations</th>
                 <th className="px-6 py-4 text-xs font-mono uppercase tracking-wider text-zinc-400">Reference</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-zinc-100">
-              {transactions.length === 0 ? (
+              {filteredTransactions.length === 0 ? (
                 <tr>
-                  <td colSpan={5} className="px-6 py-12 text-center text-zinc-500">
+                  <td colSpan={6} className="px-6 py-12 text-center text-zinc-500">
                     No transactions recorded yet.
                   </td>
                 </tr>
               ) : (
-                transactions.map((tx) => {
+                filteredTransactions.map((tx) => {
                   const item = items.find(i => i.id === tx.itemId);
+                  const signedQuantity = getSignedQuantity(tx);
                   return (
                     <tr key={tx.id} className="hover:bg-zinc-50/50 transition-colors">
                       <td className="px-6 py-4 text-xs text-zinc-500 font-mono">
@@ -102,9 +157,13 @@ export default function TransactionsPage() {
                         <p className="text-xs text-zinc-500 font-mono">{item?.sku || 'NO-SKU'}</p>
                       </td>
                       <td className="px-6 py-4 text-right">
-                        <span className={`text-sm font-bold ${tx.quantity > 0 ? 'text-green-600' : 'text-red-600'}`}>
-                          {tx.quantity > 0 ? '+' : ''}{tx.quantity} {item?.unit || ''}
+                        <span className={`text-sm font-bold ${signedQuantity >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                          {signedQuantity >= 0 ? '+' : ''}{signedQuantity} {item?.unit || ''}
                         </span>
+                      </td>
+                      <td className="px-6 py-4 text-xs text-zinc-500">
+                        <p>From: {getLocationName(tx.sourceLocationId)}</p>
+                        <p>To: {getLocationName(tx.destinationLocationId)}</p>
                       </td>
                       <td className="px-6 py-4">
                         <p className="text-xs text-zinc-500 font-mono">{tx.referenceId || '-'}</p>

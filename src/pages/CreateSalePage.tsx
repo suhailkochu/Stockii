@@ -4,20 +4,23 @@ import { useTenancy } from '../contexts';
 import { useAuth } from '../contexts';
 import { saleService } from '../services/saleService';
 import { inventoryService } from '../services/inventoryService';
-import { Customer, Item, SaleLine, InventoryLocation } from '../types';
+import { Customer, Item, SaleLine, InventoryLocation, StockSummary } from '../types';
 import { Plus, Trash2, Search, Loader2, ShoppingCart, ArrowLeft } from 'lucide-react';
 import { motion } from 'motion/react';
 import { Link } from 'react-router-dom';
+import { useNotifications } from '../notifications';
 
 export const CreateSalePage: React.FC = () => {
   const { currentOrg } = useTenancy();
   const { user } = useAuth();
+  const { success, error: notifyError } = useNotifications();
   const [searchParams] = useSearchParams();
   const initialLocationId = searchParams.get('locationId');
 
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [items, setItems] = useState<Item[]>([]);
   const [locations, setLocations] = useState<InventoryLocation[]>([]);
+  const [locationStock, setLocationStock] = useState<StockSummary[]>([]);
   const [selectedCustomer, setSelectedCustomer] = useState('');
   const [selectedLocation, setSelectedLocation] = useState(initialLocationId || '');
   const [saleItems, setSaleItems] = useState<Partial<SaleLine>[]>([]);
@@ -41,15 +44,61 @@ export const CreateSalePage: React.FC = () => {
     }
   }, [currentOrg]);
 
+  useEffect(() => {
+    if (!currentOrg || !selectedLocation) {
+      setLocationStock([]);
+      return;
+    }
+
+    inventoryService.getStockByLocation(currentOrg.id, selectedLocation)
+      .then(setLocationStock)
+      .catch((error) => {
+        console.error('Error loading location stock:', error);
+        setLocationStock([]);
+      });
+  }, [currentOrg, selectedLocation]);
+
+  useEffect(() => {
+    setSaleItems(currentItems =>
+      currentItems
+        .map((line) => {
+          const availableStock = locationStock.find(stock => stock.itemId === line.itemId)?.quantity || 0;
+          if (availableStock <= 0) {
+            return null;
+          }
+
+          const quantity = Math.min(Math.max(1, line.quantity || 1), availableStock);
+          const unitPrice = line.unitPrice || 0;
+
+          return {
+            ...line,
+            quantity,
+            subtotal: quantity * unitPrice,
+          };
+        })
+        .filter(Boolean) as Partial<SaleLine>[]
+    );
+  }, [locationStock]);
+
   const totalAmount = saleItems.reduce((sum, item) => sum + (item.subtotal || 0), 0);
 
   const taxRate = currentOrg?.settings?.taxEnabled ? (currentOrg.settings.taxRate || 0) : 0;
   const taxAmount = totalAmount * (taxRate / 100);
   const finalTotal = totalAmount + taxAmount;
 
+  const getAvailableStock = (itemId: string) => {
+    return locationStock.find(stock => stock.itemId === itemId)?.quantity || 0;
+  };
+
   const addItem = (item: Item) => {
     const existing = saleItems.find(si => si.itemId === item.id);
     if (existing) return;
+
+    const availableStock = getAvailableStock(item.id);
+    if (availableStock <= 0) {
+      notifyError(`No stock available for ${item.name} at the selected location.`);
+      return;
+    }
 
     setSaleItems([...saleItems, {
       itemId: item.id,
@@ -63,6 +112,10 @@ export const CreateSalePage: React.FC = () => {
   const updateItem = (index: number, updates: Partial<SaleLine>) => {
     const newItems = [...saleItems];
     const item = { ...newItems[index], ...updates };
+    const availableStock = getAvailableStock(item.itemId!);
+    if (item.quantity) {
+      item.quantity = Math.min(Math.max(1, item.quantity), availableStock);
+    }
     if (item.quantity && item.unitPrice) {
       item.subtotal = item.quantity * item.unitPrice;
     }
@@ -92,20 +145,21 @@ export const CreateSalePage: React.FC = () => {
         userId: user.uid,
         notes
       });
-      alert('Sale recorded successfully');
+      success('Sale recorded successfully');
       setSaleItems([]);
       setSelectedCustomer('');
     } catch (error: any) {
       console.error(error);
-      alert(error.message || 'Failed to record sale');
+      notifyError(error.message || 'Failed to record sale');
     } finally {
       setLoading(false);
     }
   };
 
   const filteredItems = items.filter(item => 
-    item.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    item.sku?.toLowerCase().includes(searchTerm.toLowerCase())
+    (item.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
+    item.sku?.toLowerCase().includes(searchTerm.toLowerCase())) &&
+    getAvailableStock(item.id) > 0
   );
 
   return (
@@ -165,9 +219,16 @@ export const CreateSalePage: React.FC = () => {
                     className="w-full text-left px-4 py-2 hover:bg-gray-50 border-b last:border-0"
                   >
                     <div className="font-medium">{item.name}</div>
-                    <div className="text-xs text-gray-500">Price: {item.sellingPrice} | Stock: {item.currentStock}</div>
+                    <div className="text-xs text-gray-500">
+                      Price: {item.sellingPrice} | Available here: {getAvailableStock(item.id)} {item.unit}
+                    </div>
                   </button>
                 ))}
+                {filteredItems.length === 0 && (
+                  <div className="px-4 py-3 text-sm text-gray-500">
+                    No stocked items found for this location.
+                  </div>
+                )}
               </div>
             )}
           </div>
@@ -175,16 +236,21 @@ export const CreateSalePage: React.FC = () => {
           <div className="space-y-4">
             {saleItems.map((si, index) => {
               const item = items.find(i => i.id === si.itemId);
+              const availableStock = getAvailableStock(si.itemId!);
               return (
                 <div key={si.itemId} className="flex items-start gap-4 p-3 bg-gray-50 rounded-lg">
                   <div className="flex-1">
                     <div className="font-medium">{item?.name}</div>
-                    <div className="text-xs text-gray-500">Subtotal: {si.subtotal}</div>
+                    <div className="text-xs text-gray-500">
+                      Available: {availableStock} {item?.unit} | Subtotal: {si.subtotal}
+                    </div>
                   </div>
                   <div className="w-24">
                     <label className="block text-[10px] uppercase text-gray-400 font-bold">Qty</label>
                     <input
                       type="number"
+                      min="1"
+                      max={availableStock}
                       value={si.quantity}
                       onChange={(e) => updateItem(index, { quantity: Number(e.target.value) })}
                       className="w-full p-1 border rounded"

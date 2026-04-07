@@ -6,17 +6,20 @@ import { inventoryService } from '../services/inventoryService';
 import { Truck, Item, InventoryLocation, StockSummary } from '../types';
 import { ArrowLeft, Package, ArrowUpRight, ArrowDownLeft, Search, Plus, Minus, Check } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
+import { useNotifications } from '../notifications';
 
 export default function TruckStockPage() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const { currentOrg } = useTenancy();
   const { user } = useAuth();
+  const { success, error: notifyError } = useNotifications();
   
   const [truck, setTruck] = useState<Truck | null>(null);
   const [items, setItems] = useState<Item[]>([]);
   const [locations, setLocations] = useState<InventoryLocation[]>([]);
   const [stock, setStock] = useState<StockSummary[]>([]);
+  const [sourceStock, setSourceStock] = useState<StockSummary[]>([]);
   const [loading, setLoading] = useState(true);
   
   const [isLoadModalOpen, setIsLoadModalOpen] = useState(false);
@@ -26,12 +29,18 @@ export default function TruckStockPage() {
   const [quantity, setQuantity] = useState(1);
   const [sourceLocationId, setSourceLocationId] = useState('');
   const [destLocationId, setDestLocationId] = useState('');
+  const [submitting, setSubmitting] = useState(false);
 
   useEffect(() => {
     if (currentOrg && id) {
       fetchData();
     }
   }, [currentOrg, id]);
+
+  useEffect(() => {
+    if (!currentOrg || !sourceLocationId || !isLoadModalOpen) return;
+    inventoryService.getStockByLocation(currentOrg.id, sourceLocationId).then(setSourceStock).catch(console.error);
+  }, [currentOrg, sourceLocationId, isLoadModalOpen]);
 
   const fetchData = async () => {
     if (!currentOrg || !id) return;
@@ -66,7 +75,8 @@ export default function TruckStockPage() {
 
   const handleStockAction = async (type: 'load' | 'unload') => {
     if (!currentOrg || !user || !truck || !selectedItem) return;
-    
+
+    setSubmitting(true);
     try {
       await inventoryService.createTransaction(currentOrg.id, user.uid, {
         itemId: selectedItem.id,
@@ -81,16 +91,35 @@ export default function TruckStockPage() {
       setIsUnloadModalOpen(false);
       setSelectedItem(null);
       setQuantity(1);
+      setSearchQuery('');
       fetchData();
+      success(`Stock ${type === 'load' ? 'loaded to' : 'unloaded from'} ${truck.name}.`);
     } catch (error: any) {
-      alert(error.message || 'Error performing stock action');
+      notifyError(error.message || 'Error performing stock action');
+    } finally {
+      setSubmitting(false);
     }
   };
 
-  const filteredItems = items.filter(item => 
-    item.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-    item.sku?.toLowerCase().includes(searchQuery.toLowerCase())
-  );
+  const filteredItems = items.filter(item => {
+    const matchesSearch =
+      item.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
+      item.sku?.toLowerCase().includes(searchQuery.toLowerCase());
+    if (!matchesSearch) return false;
+
+    if (!truck) return true;
+
+    const locationToCheck = isLoadModalOpen ? sourceLocationId : truck.locationId;
+    const summary = isLoadModalOpen
+      ? sourceStock.find(entry => entry.itemId === item.id && entry.locationId === locationToCheck)
+      : stock.find(entry => entry.itemId === item.id && entry.locationId === locationToCheck);
+
+    if (isUnloadModalOpen || isLoadModalOpen) {
+      return (summary?.quantity || 0) > 0;
+    }
+
+    return true;
+  });
 
   if (loading) return <div className="p-8 text-center text-zinc-500">Loading truck stock...</div>;
   if (!truck) return <div className="p-8 text-center text-zinc-500">Truck not found.</div>;
@@ -205,6 +234,7 @@ export default function TruckStockPage() {
                       {filteredItems.map(item => (
                         <button
                           key={item.id}
+                          type="button"
                           onClick={() => setSelectedItem(item)}
                           className="w-full flex items-center justify-between p-3 rounded-xl border border-zinc-100 hover:border-orange-200 hover:bg-orange-50 transition-all"
                         >
@@ -213,11 +243,20 @@ export default function TruckStockPage() {
                             <p className="text-xs text-zinc-500">{item.sku}</p>
                           </div>
                           <div className="text-right">
-                            <p className="text-xs font-bold text-zinc-400 uppercase">Stock</p>
-                            <p className="text-sm font-bold text-zinc-900">{item.currentStock} {item.unit}</p>
+                            <p className="text-xs font-bold text-zinc-400 uppercase">{isLoadModalOpen ? 'Available' : 'Truck Stock'}</p>
+                            <p className="text-sm font-bold text-zinc-900">
+                              {(isLoadModalOpen
+                                ? sourceStock.find(entry => entry.itemId === item.id && entry.locationId === sourceLocationId)?.quantity
+                                : stock.find(entry => entry.itemId === item.id && entry.locationId === truck.locationId)?.quantity) || 0} {item.unit}
+                            </p>
                           </div>
                         </button>
                       ))}
+                      {filteredItems.length === 0 && (
+                        <div className="p-4 text-sm text-zinc-500 text-center">
+                          {isLoadModalOpen ? 'No items found for this source location.' : 'This truck has no matching stock to unload.'}
+                        </div>
+                      )}
                     </div>
                   </div>
                 ) : (
@@ -289,10 +328,11 @@ export default function TruckStockPage() {
                       </button>
                       <button
                         onClick={() => handleStockAction(isLoadModalOpen ? 'load' : 'unload')}
-                        className="flex-1 px-4 py-2 bg-orange-600 text-white rounded-xl hover:bg-orange-700 transition-colors font-medium flex items-center justify-center gap-2"
+                        disabled={submitting || quantity <= 0}
+                        className="flex-1 px-4 py-2 bg-orange-600 text-white rounded-xl hover:bg-orange-700 transition-colors font-medium flex items-center justify-center gap-2 disabled:opacity-50"
                       >
                         <Check className="w-4 h-4" />
-                        <span>Confirm {isLoadModalOpen ? 'Load' : 'Unload'}</span>
+                        <span>{submitting ? 'Saving...' : `Confirm ${isLoadModalOpen ? 'Load' : 'Unload'}`}</span>
                       </button>
                     </div>
                   </div>

@@ -1,15 +1,40 @@
-import React, { useState, useEffect } from 'react';
+import React, { useEffect, useState } from 'react';
+import { Link } from 'react-router-dom';
 import { useTenancy } from '../contexts';
 import { useAuth } from '../contexts';
 import { purchaseService } from '../services/purchaseService';
 import { inventoryService } from '../services/inventoryService';
 import { Supplier, Item, PurchaseLine, InventoryLocation } from '../types';
-import { Plus, Trash2, Search, Loader2 } from 'lucide-react';
-import { motion } from 'motion/react';
+import { Plus, Trash2, Search, Loader2, MapPin, Truck, PackagePlus, Building2, X } from 'lucide-react';
+import { motion, AnimatePresence } from 'motion/react';
+import { useNotifications } from '../notifications';
+
+type SupplierFormState = Partial<Supplier>;
+type LocationFormState = {
+  name: string;
+  type: InventoryLocation['type'];
+  isDefault: boolean;
+};
+
+const emptySupplierForm: SupplierFormState = {
+  name: '',
+  contactPerson: '',
+  phone: '',
+  email: '',
+  address: '',
+  balance: 0,
+};
+
+const emptyLocationForm: LocationFormState = {
+  name: '',
+  type: 'warehouse',
+  isDefault: false,
+};
 
 export const CreatePurchasePage: React.FC = () => {
   const { currentOrg } = useTenancy();
   const { user } = useAuth();
+  const { success, error: notifyError } = useNotifications();
   const [suppliers, setSuppliers] = useState<Supplier[]>([]);
   const [items, setItems] = useState<Item[]>([]);
   const [locations, setLocations] = useState<InventoryLocation[]>([]);
@@ -22,17 +47,34 @@ export const CreatePurchasePage: React.FC = () => {
   const [loading, setLoading] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
 
+  const [showSupplierModal, setShowSupplierModal] = useState(false);
+  const [showLocationModal, setShowLocationModal] = useState(false);
+  const [supplierForm, setSupplierForm] = useState<SupplierFormState>(emptySupplierForm);
+  const [locationForm, setLocationForm] = useState<LocationFormState>(emptyLocationForm);
+  const [setupSubmitting, setSetupSubmitting] = useState(false);
+
   useEffect(() => {
     if (currentOrg) {
-      purchaseService.getSuppliers(currentOrg.id).then(setSuppliers);
-      inventoryService.getItems(currentOrg.id).then(setItems);
-      inventoryService.getLocations(currentOrg.id).then(locs => {
-        setLocations(locs);
-        const def = locs.find(l => l.isDefault || l.type === 'warehouse');
-        if (def) setSelectedLocation(def.id);
-      });
+      loadReferenceData();
     }
   }, [currentOrg]);
+
+  const loadReferenceData = async () => {
+    if (!currentOrg) return;
+    const [supplierData, itemData, locationData] = await Promise.all([
+      purchaseService.getSuppliers(currentOrg.id),
+      inventoryService.getItems(currentOrg.id),
+      inventoryService.getLocations(currentOrg.id),
+    ]);
+    setSuppliers(supplierData);
+    setItems(itemData);
+    setLocations(locationData);
+
+    if (!selectedLocation) {
+      const def = locationData.find(location => location.isDefault || location.type === 'warehouse');
+      if (def) setSelectedLocation(def.id);
+    }
+  };
 
   const totalAmount = purchaseItems.reduce((sum, item) => sum + (item.subtotal || 0), 0);
 
@@ -81,31 +123,91 @@ export const CreatePurchasePage: React.FC = () => {
         userId: user.uid,
         notes
       });
-      // Reset form or redirect
-      alert('Purchase recorded successfully');
+      success('Purchase recorded successfully');
       setPurchaseItems([]);
       setSelectedSupplier('');
-    } catch (error) {
+      setNotes('');
+      setPaidAmount(0);
+    } catch (error: any) {
       console.error(error);
-      alert('Failed to record purchase');
+      notifyError(error.message || 'Failed to record purchase');
     } finally {
       setLoading(false);
     }
   };
 
-  const filteredItems = items.filter(item => 
+  const handleCreateSupplier = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!currentOrg) return;
+    setSetupSubmitting(true);
+    try {
+      const supplier = await purchaseService.createSupplier(currentOrg.id, supplierForm);
+      setSuppliers(prev => [...prev, supplier].sort((a, b) => a.name.localeCompare(b.name)));
+      setSelectedSupplier(supplier.id);
+      setShowSupplierModal(false);
+      setSupplierForm(emptySupplierForm);
+      success('Supplier added successfully');
+    } catch (error: any) {
+      console.error(error);
+      notifyError(error.message || 'Failed to add supplier');
+    } finally {
+      setSetupSubmitting(false);
+    }
+  };
+
+  const handleCreateLocation = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!currentOrg) return;
+    setSetupSubmitting(true);
+    try {
+      const location = await inventoryService.createLocation(currentOrg.id, locationForm);
+      setLocations(prev => [...prev, location].sort((a, b) => a.name.localeCompare(b.name)));
+      setSelectedLocation(location.id);
+      setShowLocationModal(false);
+      setLocationForm(emptyLocationForm);
+      success('Location added successfully');
+    } catch (error: any) {
+      console.error(error);
+      notifyError(error.message || 'Failed to add location');
+    } finally {
+      setSetupSubmitting(false);
+    }
+  };
+
+  const filteredItems = items.filter(item =>
     item.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
     item.sku?.toLowerCase().includes(searchTerm.toLowerCase())
   );
 
   return (
-    <div className="max-w-4xl mx-auto p-4">
-      <h1 className="text-2xl font-bold mb-6">New Purchase</h1>
+    <div className="max-w-5xl mx-auto p-4 space-y-6">
+      <header className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+        <div>
+          <h1 className="text-2xl font-bold">New Purchase</h1>
+          <p className="text-sm text-zinc-500">Receive stock into a warehouse, cold storage, or any custom location.</p>
+        </div>
+        <Link
+          to="/purchases"
+          className="inline-flex items-center gap-2 px-4 py-2 rounded-xl border border-zinc-200 bg-white text-zinc-700 hover:bg-zinc-50 transition-colors"
+        >
+          <PackagePlus className="w-4 h-4" />
+          View Purchases
+        </Link>
+      </header>
 
       <form onSubmit={handleSubmit} className="space-y-6">
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          <div className="bg-white p-4 rounded-xl shadow-sm border border-gray-100">
-            <label className="block text-sm font-medium text-gray-700 mb-1">Supplier</label>
+          <div className="bg-white p-4 rounded-xl shadow-sm border border-gray-100 space-y-3">
+            <div className="flex items-center justify-between gap-3">
+              <label className="block text-sm font-medium text-gray-700">Supplier</label>
+              <button
+                type="button"
+                onClick={() => setShowSupplierModal(true)}
+                className="text-xs font-semibold text-orange-600 hover:text-orange-700"
+              >
+                + Add Supplier
+              </button>
+            </div>
             <select
               value={selectedSupplier}
               onChange={(e) => setSelectedSupplier(e.target.value)}
@@ -117,10 +219,20 @@ export const CreatePurchasePage: React.FC = () => {
                 <option key={s.id} value={s.id}>{s.name} (Bal: {s.balance})</option>
               ))}
             </select>
+            <p className="text-xs text-zinc-500">Suppliers track where incoming stock came from and how much is payable.</p>
           </div>
 
-          <div className="bg-white p-4 rounded-xl shadow-sm border border-gray-100">
-            <label className="block text-sm font-medium text-gray-700 mb-1">Destination Location</label>
+          <div className="bg-white p-4 rounded-xl shadow-sm border border-gray-100 space-y-3">
+            <div className="flex items-center justify-between gap-3">
+              <label className="block text-sm font-medium text-gray-700">Destination Location</label>
+              <button
+                type="button"
+                onClick={() => setShowLocationModal(true)}
+                className="text-xs font-semibold text-orange-600 hover:text-orange-700"
+              >
+                + Add Location
+              </button>
+            </div>
             <select
               value={selectedLocation}
               onChange={(e) => setSelectedLocation(e.target.value)}
@@ -132,6 +244,7 @@ export const CreatePurchasePage: React.FC = () => {
                 <option key={l.id} value={l.id}>{l.name} ({l.type})</option>
               ))}
             </select>
+            <p className="text-xs text-zinc-500">Examples: Main Warehouse, Cold Storage, Return Holding, Backup Store.</p>
           </div>
         </div>
 
@@ -155,26 +268,35 @@ export const CreatePurchasePage: React.FC = () => {
                     className="w-full text-left px-4 py-2 hover:bg-gray-50 border-b last:border-0"
                   >
                     <div className="font-medium">{item.name}</div>
-                    <div className="text-xs text-gray-500">SKU: {item.sku || 'N/A'} | Stock: {item.currentStock}</div>
+                    <div className="text-xs text-gray-500">SKU: {item.sku || 'N/A'} | Current Total Stock: {item.currentStock}</div>
                   </button>
                 ))}
+                {filteredItems.length === 0 && (
+                  <div className="px-4 py-3 text-sm text-zinc-500">No items matched your search.</div>
+                )}
               </div>
             )}
           </div>
 
           <div className="space-y-4">
+            {purchaseItems.length === 0 && (
+              <div className="rounded-xl border border-dashed border-zinc-200 bg-zinc-50 p-6 text-center text-sm text-zinc-500">
+                Add items you are receiving into stock.
+              </div>
+            )}
             {purchaseItems.map((pi, index) => {
               const item = items.find(i => i.id === pi.itemId);
               return (
                 <div key={pi.itemId} className="flex items-start gap-4 p-3 bg-gray-50 rounded-lg">
                   <div className="flex-1">
                     <div className="font-medium">{item?.name}</div>
-                    <div className="text-xs text-gray-500">Subtotal: {pi.subtotal}</div>
+                    <div className="text-xs text-gray-500">Subtotal: {pi.subtotal?.toFixed(2)}</div>
                   </div>
                   <div className="w-24">
                     <label className="block text-[10px] uppercase text-gray-400 font-bold">Qty</label>
                     <input
                       type="number"
+                      min="1"
                       value={pi.quantity}
                       onChange={(e) => updateItem(index, { quantity: Number(e.target.value) })}
                       className="w-full p-1 border rounded"
@@ -184,6 +306,8 @@ export const CreatePurchasePage: React.FC = () => {
                     <label className="block text-[10px] uppercase text-gray-400 font-bold">Cost</label>
                     <input
                       type="number"
+                      min="0"
+                      step="0.01"
                       value={pi.unitCost}
                       onChange={(e) => updateItem(index, { unitCost: Number(e.target.value) })}
                       className="w-full p-1 border rounded"
@@ -202,8 +326,8 @@ export const CreatePurchasePage: React.FC = () => {
           </div>
         </div>
 
-        <div className="bg-white p-4 rounded-xl shadow-sm border border-gray-100">
-          <div className="grid grid-cols-2 gap-4 mb-4">
+        <div className="bg-white p-4 rounded-xl shadow-sm border border-gray-100 space-y-4">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">Payment Type</label>
               <div className="flex gap-2">
@@ -228,6 +352,7 @@ export const CreatePurchasePage: React.FC = () => {
                 <label className="block text-sm font-medium text-gray-700 mb-1">Paid Amount</label>
                 <input
                   type="number"
+                  min="0"
                   value={paidAmount}
                   onChange={(e) => setPaidAmount(Number(e.target.value))}
                   className="w-full p-2 border rounded-lg"
@@ -236,21 +361,167 @@ export const CreatePurchasePage: React.FC = () => {
             )}
           </div>
 
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">Notes</label>
+            <textarea
+              value={notes}
+              onChange={(e) => setNotes(e.target.value)}
+              className="w-full p-3 border rounded-lg min-h-24"
+              placeholder="Invoice number, batch info, damaged cartons, temperature notes, etc."
+            />
+          </div>
+
           <div className="flex justify-between items-center pt-4 border-t">
             <div className="text-gray-500">Total Amount</div>
-            <div className="text-2xl font-bold text-blue-600">{totalAmount}</div>
+            <div className="text-2xl font-bold text-blue-600">{totalAmount.toFixed(2)}</div>
           </div>
         </div>
 
         <button
           type="submit"
-          disabled={loading || purchaseItems.length === 0 || !selectedSupplier}
+          disabled={loading || purchaseItems.length === 0 || !selectedSupplier || !selectedLocation}
           className="w-full bg-blue-600 text-white py-3 rounded-xl font-bold hover:bg-blue-700 disabled:opacity-50 flex justify-center items-center gap-2"
         >
           {loading ? <Loader2 className="w-5 h-5 animate-spin" /> : <Plus className="w-5 h-5" />}
           Complete Purchase
         </button>
       </form>
+
+      <AnimatePresence>
+        {showSupplierModal && (
+          <EntityModal title="Add Supplier" onClose={() => setShowSupplierModal(false)}>
+            <form onSubmit={handleCreateSupplier} className="space-y-4">
+              <div>
+                <label className="block text-xs font-bold uppercase text-zinc-400 mb-1">Supplier Name</label>
+                <input
+                  required
+                  value={supplierForm.name}
+                  onChange={(e) => setSupplierForm({ ...supplierForm, name: e.target.value })}
+                  className="w-full px-4 py-2 border rounded-xl"
+                />
+              </div>
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-xs font-bold uppercase text-zinc-400 mb-1">Contact Person</label>
+                  <input
+                    value={supplierForm.contactPerson}
+                    onChange={(e) => setSupplierForm({ ...supplierForm, contactPerson: e.target.value })}
+                    className="w-full px-4 py-2 border rounded-xl"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-bold uppercase text-zinc-400 mb-1">Phone</label>
+                  <input
+                    value={supplierForm.phone}
+                    onChange={(e) => setSupplierForm({ ...supplierForm, phone: e.target.value })}
+                    className="w-full px-4 py-2 border rounded-xl"
+                  />
+                </div>
+              </div>
+              <div>
+                <label className="block text-xs font-bold uppercase text-zinc-400 mb-1">Email</label>
+                <input
+                  type="email"
+                  value={supplierForm.email}
+                  onChange={(e) => setSupplierForm({ ...supplierForm, email: e.target.value })}
+                  className="w-full px-4 py-2 border rounded-xl"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-bold uppercase text-zinc-400 mb-1">Address</label>
+                <textarea
+                  value={supplierForm.address}
+                  onChange={(e) => setSupplierForm({ ...supplierForm, address: e.target.value })}
+                  className="w-full px-4 py-2 border rounded-xl min-h-20"
+                />
+              </div>
+              <button
+                type="submit"
+                disabled={setupSubmitting}
+                className="w-full py-3 rounded-xl bg-orange-500 text-white font-semibold disabled:opacity-50"
+              >
+                {setupSubmitting ? 'Saving...' : 'Save Supplier'}
+              </button>
+            </form>
+          </EntityModal>
+        )}
+      </AnimatePresence>
+
+      <AnimatePresence>
+        {showLocationModal && (
+          <EntityModal title="Add Destination Location" onClose={() => setShowLocationModal(false)}>
+            <form onSubmit={handleCreateLocation} className="space-y-4">
+              <div>
+                <label className="block text-xs font-bold uppercase text-zinc-400 mb-1">Location Name</label>
+                <input
+                  required
+                  value={locationForm.name}
+                  onChange={(e) => setLocationForm({ ...locationForm, name: e.target.value })}
+                  className="w-full px-4 py-2 border rounded-xl"
+                  placeholder="Main Warehouse, Cold Storage 1, Backup Store"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-bold uppercase text-zinc-400 mb-1">Type</label>
+                <select
+                  value={locationForm.type}
+                  onChange={(e) => setLocationForm({ ...locationForm, type: e.target.value as InventoryLocation['type'] })}
+                  className="w-full px-4 py-2 border rounded-xl"
+                >
+                  <option value="warehouse">Warehouse</option>
+                  <option value="cold-storage">Cold Storage</option>
+                  <option value="return-holding">Return Holding</option>
+                  <option value="damaged-zone">Damaged Zone</option>
+                  <option value="custom">Custom</option>
+                </select>
+              </div>
+              <label className="flex items-center gap-3 rounded-xl border border-zinc-200 p-3">
+                <input
+                  type="checkbox"
+                  checked={locationForm.isDefault}
+                  onChange={(e) => setLocationForm({ ...locationForm, isDefault: e.target.checked })}
+                />
+                <span className="text-sm text-zinc-700">Set as default receive location</span>
+              </label>
+              <button
+                type="submit"
+                disabled={setupSubmitting}
+                className="w-full py-3 rounded-xl bg-orange-500 text-white font-semibold disabled:opacity-50"
+              >
+                {setupSubmitting ? 'Saving...' : 'Save Location'}
+              </button>
+            </form>
+          </EntityModal>
+        )}
+      </AnimatePresence>
     </div>
   );
 };
+
+function EntityModal({ title, onClose, children }: { title: string; onClose: () => void; children: React.ReactNode }) {
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+      <motion.div
+        initial={{ opacity: 0 }}
+        animate={{ opacity: 1 }}
+        exit={{ opacity: 0 }}
+        onClick={onClose}
+        className="absolute inset-0 bg-zinc-900/40 backdrop-blur-sm"
+      />
+      <motion.div
+        initial={{ opacity: 0, scale: 0.95, y: 12 }}
+        animate={{ opacity: 1, scale: 1, y: 0 }}
+        exit={{ opacity: 0, scale: 0.95, y: 12 }}
+        className="relative w-full max-w-lg rounded-3xl bg-white shadow-2xl overflow-hidden"
+      >
+        <div className="flex items-center justify-between border-b border-zinc-100 p-6">
+          <h3 className="text-xl font-bold text-zinc-900">{title}</h3>
+          <button onClick={onClose} className="p-2 rounded-full hover:bg-zinc-100">
+            <X className="w-5 h-5 text-zinc-400" />
+          </button>
+        </div>
+        <div className="p-6">{children}</div>
+      </motion.div>
+    </div>
+  );
+}

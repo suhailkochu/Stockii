@@ -1,14 +1,27 @@
-import React, { useEffect, useState } from 'react';
-import { useAuth, useTenancy } from '../contexts';
+import React, { useEffect, useMemo, useState } from 'react';
+import { useTenancy } from '../contexts';
 import { orgService } from '../services/orgService';
 import { OrganizationSettings, Role, ROLE_PERMISSIONS } from '../types';
-import { Settings, Shield, Layout, Save, Check, X } from 'lucide-react';
+import { Shield, Layout, Save, Check, X, Search, Coins } from 'lucide-react';
+import { useNotifications } from '../notifications';
+
+const CURRENCY_OPTIONS = [
+  { code: 'USD', label: 'US Dollar' },
+  { code: 'INR', label: 'Indian Rupee' },
+  { code: 'AED', label: 'UAE Dirham' },
+  { code: 'SAR', label: 'Saudi Riyal' },
+  { code: 'EUR', label: 'Euro' },
+  { code: 'GBP', label: 'British Pound' },
+];
+
+const prettify = (value: string) => value.replace(/([A-Z])/g, ' $1').trim();
 
 export default function SettingsPage() {
   const { currentOrg } = useTenancy();
+  const { success, error: notifyError } = useNotifications();
   const [settings, setSettings] = useState<OrganizationSettings | null>(null);
   const [saving, setSaving] = useState(false);
-  const [success, setSuccess] = useState(false);
+  const [searchTerm, setSearchTerm] = useState('');
 
   useEffect(() => {
     if (currentOrg) {
@@ -32,33 +45,119 @@ export default function SettingsPage() {
     setSaving(true);
     try {
       await orgService.updateSettings(currentOrg.id, settings);
-      setSuccess(true);
-      setTimeout(() => setSuccess(false), 3000);
+      success('Settings saved successfully');
     } catch (error) {
       console.error('Error saving settings:', error);
+      notifyError('Failed to save settings');
     } finally {
       setSaving(false);
     }
   };
 
+  const filteredModules = useMemo(() => {
+    if (!settings) return [];
+    return Object.entries(settings.modules).filter(([key]) =>
+      prettify(key).toLowerCase().includes(searchTerm.toLowerCase())
+    );
+  }, [settings, searchTerm]);
+
+  const filteredRoles = useMemo(() => {
+    return (Object.keys(ROLE_PERMISSIONS) as Role[]).filter((role) => {
+      if (!searchTerm.trim()) return true;
+      if (role.toLowerCase().includes(searchTerm.toLowerCase())) return true;
+      return Object.keys(ROLE_PERMISSIONS[role]).some((permission) =>
+        prettify(permission).toLowerCase().includes(searchTerm.toLowerCase())
+      );
+    });
+  }, [searchTerm]);
+
   if (!settings) return <div className="p-8 text-center">Loading settings...</div>;
 
   return (
-    <div className="max-w-4xl mx-auto space-y-12">
-      <header className="flex items-center justify-between">
+    <div className="max-w-5xl mx-auto space-y-10">
+      <header className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
         <div>
           <h2 className="text-3xl font-bold tracking-tight text-zinc-900">Organization Settings</h2>
-          <p className="text-zinc-500 font-serif italic">Configure modules and permissions for your workspace.</p>
+          <p className="text-zinc-500 font-serif italic">Set your defaults and control what modules are active.</p>
         </div>
-        <button 
+        <button
           onClick={saveSettings}
           disabled={saving}
           className="flex items-center gap-2 px-6 py-2.5 bg-orange-500 text-white rounded-xl font-bold shadow-lg shadow-orange-100 hover:bg-orange-600 transition-all disabled:opacity-50"
         >
           {saving ? <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" /> : <Save className="w-4 h-4" />}
-          {success ? 'Saved!' : 'Save Changes'}
+          Save Changes
         </button>
       </header>
+
+      <div className="bg-white border border-zinc-200 rounded-2xl p-5 shadow-sm">
+        <div className="relative">
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-zinc-400" />
+          <input
+            type="text"
+            value={searchTerm}
+            onChange={(e) => setSearchTerm(e.target.value)}
+            placeholder="Search settings, modules, or permissions..."
+            className="w-full pl-10 pr-4 py-3 bg-zinc-50 border border-zinc-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-orange-500/20 focus:border-orange-500 transition-all"
+          />
+        </div>
+      </div>
+
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-12">
+        <div className="md:col-span-1 space-y-4">
+          <div className="flex items-center gap-2 text-zinc-900 font-bold">
+            <Coins className="w-5 h-5 text-orange-500" />
+            <h3>Business Defaults</h3>
+          </div>
+          <p className="text-sm text-zinc-500">Choose defaults used across invoices, sales, purchases, and reports.</p>
+        </div>
+
+        <div className="md:col-span-2 bg-white border border-zinc-200 rounded-2xl p-6 shadow-sm space-y-5">
+          <div>
+            <label className="block text-xs font-bold uppercase tracking-wider text-zinc-400 mb-2">Default Currency</label>
+            <select
+              value={settings.currency}
+              onChange={(e) => setSettings({ ...settings, currency: e.target.value })}
+              className="w-full px-4 py-3 bg-zinc-50 border border-zinc-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-orange-500"
+            >
+              {CURRENCY_OPTIONS.map((currency) => (
+                <option key={currency.code} value={currency.code}>
+                  {currency.code} - {currency.label}
+                </option>
+              ))}
+            </select>
+            <p className="mt-2 text-xs text-zinc-500">This becomes the default currency shown throughout the app.</p>
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <label className="flex items-center justify-between rounded-2xl border border-zinc-200 p-4 cursor-pointer">
+              <div>
+                <p className="text-sm font-bold text-zinc-900">Enable Tax</p>
+                <p className="text-xs text-zinc-500">Use organization-wide tax in sales.</p>
+              </div>
+              <input
+                type="checkbox"
+                checked={settings.taxEnabled}
+                onChange={(e) => setSettings({ ...settings, taxEnabled: e.target.checked })}
+              />
+            </label>
+
+            <div className="rounded-2xl border border-zinc-200 p-4">
+              <label className="block text-sm font-bold text-zinc-900 mb-2">Tax Rate (%)</label>
+              <input
+                type="number"
+                min="0"
+                step="0.01"
+                value={settings.taxRate}
+                onChange={(e) => setSettings({ ...settings, taxRate: Number(e.target.value) })}
+                className="w-full px-4 py-2 bg-zinc-50 border border-zinc-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-orange-500"
+              />
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div className="h-px bg-zinc-100" />
 
       <div className="grid grid-cols-1 md:grid-cols-3 gap-12">
         <div className="md:col-span-1 space-y-4">
@@ -68,27 +167,33 @@ export default function SettingsPage() {
           </div>
           <p className="text-sm text-zinc-500">Enable or disable modules based on your business needs.</p>
         </div>
-        
+
         <div className="md:col-span-2 grid grid-cols-1 sm:grid-cols-2 gap-4">
-          {Object.entries(settings.modules).map(([key, enabled]) => (
-            <button
-              key={key}
-              onClick={() => handleToggle(key as any)}
-              className={`flex items-center justify-between p-4 rounded-2xl border transition-all ${
-                enabled 
-                  ? 'bg-white border-orange-200 shadow-sm' 
-                  : 'bg-zinc-50 border-zinc-200 opacity-60'
-              }`}
-            >
-              <div className="text-left">
-                <p className="text-sm font-bold text-zinc-900 capitalize">{key.replace(/([A-Z])/g, ' $1')}</p>
-                <p className="text-[10px] text-zinc-500 uppercase tracking-wider font-mono">{enabled ? 'Active' : 'Disabled'}</p>
-              </div>
-              <div className={`w-10 h-6 rounded-full p-1 transition-colors ${enabled ? 'bg-orange-500' : 'bg-zinc-300'}`}>
-                <div className={`w-4 h-4 bg-white rounded-full transition-transform ${enabled ? 'translate-x-4' : 'translate-x-0'}`} />
-              </div>
-            </button>
-          ))}
+          {filteredModules.length === 0 ? (
+            <div className="sm:col-span-2 rounded-2xl border border-dashed border-zinc-200 p-8 text-center text-sm text-zinc-500">
+              No modules matched your search.
+            </div>
+          ) : (
+            filteredModules.map(([key, enabled]) => (
+              <button
+                key={key}
+                onClick={() => handleToggle(key as keyof OrganizationSettings['modules'])}
+                className={`flex items-center justify-between p-4 rounded-2xl border transition-all ${
+                  enabled
+                    ? 'bg-white border-orange-200 shadow-sm'
+                    : 'bg-zinc-50 border-zinc-200 opacity-60'
+                }`}
+              >
+                <div className="text-left">
+                  <p className="text-sm font-bold text-zinc-900 capitalize">{prettify(key)}</p>
+                  <p className="text-[10px] text-zinc-500 uppercase tracking-wider font-mono">{enabled ? 'Active' : 'Disabled'}</p>
+                </div>
+                <div className={`w-10 h-6 rounded-full p-1 transition-colors ${enabled ? 'bg-orange-500' : 'bg-zinc-300'}`}>
+                  <div className={`w-4 h-4 bg-white rounded-full transition-transform ${enabled ? 'translate-x-4' : 'translate-x-0'}`} />
+                </div>
+              </button>
+            ))
+          )}
         </div>
       </div>
 
@@ -102,26 +207,36 @@ export default function SettingsPage() {
           </div>
           <p className="text-sm text-zinc-500">View the default permissions for each role in your organization.</p>
         </div>
-        
+
         <div className="md:col-span-2 space-y-4">
-          {(Object.keys(ROLE_PERMISSIONS) as Role[]).map((role) => (
-            <div key={role} className="bg-white border border-zinc-200 rounded-2xl p-6 shadow-sm">
-              <div className="flex items-center justify-between mb-4">
-                <h4 className="font-bold text-zinc-900 capitalize">{role}</h4>
-                <span className="text-[10px] font-mono uppercase tracking-widest text-zinc-400">Default Role</span>
-              </div>
-              <div className="grid grid-cols-2 sm:grid-cols-3 gap-y-2 gap-x-4">
-                {Object.entries(ROLE_PERMISSIONS[role]).map(([perm, allowed]) => (
-                  <div key={perm} className="flex items-center gap-2">
-                    {allowed ? <Check className="w-3 h-3 text-green-500" /> : <X className="w-3 h-3 text-red-300" />}
-                    <span className={`text-[10px] capitalize ${allowed ? 'text-zinc-600' : 'text-zinc-300'}`}>
-                      {perm.replace(/([A-Z])/g, ' $1')}
-                    </span>
-                  </div>
-                ))}
-              </div>
+          {filteredRoles.length === 0 ? (
+            <div className="rounded-2xl border border-dashed border-zinc-200 p-8 text-center text-sm text-zinc-500">
+              No roles or permissions matched your search.
             </div>
-          ))}
+          ) : (
+            filteredRoles.map((role) => (
+              <div key={role} className="bg-white border border-zinc-200 rounded-2xl p-6 shadow-sm">
+                <div className="flex items-center justify-between mb-4">
+                  <h4 className="font-bold text-zinc-900 capitalize">{role}</h4>
+                  <span className="text-[10px] font-mono uppercase tracking-widest text-zinc-400">Default Role</span>
+                </div>
+                <div className="grid grid-cols-2 sm:grid-cols-3 gap-y-2 gap-x-4">
+                  {Object.entries(ROLE_PERMISSIONS[role])
+                    .filter(([permission]) =>
+                      !searchTerm.trim() || prettify(permission).toLowerCase().includes(searchTerm.toLowerCase()) || role.toLowerCase().includes(searchTerm.toLowerCase())
+                    )
+                    .map(([permission, allowed]) => (
+                      <div key={permission} className="flex items-center gap-2">
+                        {allowed ? <Check className="w-3 h-3 text-green-500" /> : <X className="w-3 h-3 text-red-300" />}
+                        <span className={`text-[10px] capitalize ${allowed ? 'text-zinc-600' : 'text-zinc-300'}`}>
+                          {prettify(permission)}
+                        </span>
+                      </div>
+                    ))}
+                </div>
+              </div>
+            ))
+          )}
         </div>
       </div>
     </div>

@@ -4,10 +4,12 @@ import { inventoryService } from '../services/inventoryService';
 import { Item, InventoryLocation } from '../types';
 import { Search, Trash2, Loader2, AlertTriangle } from 'lucide-react';
 import { motion } from 'motion/react';
+import { useNotifications } from '../notifications';
 
 export default function DamagesPage() {
   const { currentOrg } = useTenancy();
   const { user } = useAuth();
+  const { success, error: notifyError } = useNotifications();
   
   const [items, setItems] = useState<Item[]>([]);
   const [locations, setLocations] = useState<InventoryLocation[]>([]);
@@ -45,13 +47,13 @@ export default function DamagesPage() {
         notes: `Damage Logged: ${reason}. ${notes}`
       });
       
-      alert('Damage logged successfully. Stock removed.');
+      success('Damage logged successfully. Stock removed.');
       setSelectedItem(null);
       setQuantity(1);
       setReason('');
       setNotes('');
     } catch (error: any) {
-      alert(error.message || 'Failed to log damage');
+      notifyError(error.message || 'Failed to log damage');
     } finally {
       setLoading(false);
     }

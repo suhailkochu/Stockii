@@ -5,15 +5,12 @@ import {
   getDoc, 
   setDoc, 
   updateDoc, 
-  query, 
-  where, 
+  query,
   runTransaction,
-  serverTimestamp,
   orderBy
 } from 'firebase/firestore';
 import { db } from '../firebase';
 import { Supplier, Purchase, InventoryTransaction } from '../types';
-import { inventoryService } from './inventoryService';
 
 export const purchaseService = {
   async getSuppliers(orgId: string) {
@@ -34,6 +31,11 @@ export const purchaseService = {
     return newSupplier;
   },
 
+  async updateSupplier(orgId: string, supplierId: string, supplierData: Partial<Supplier>) {
+    const supplierRef = doc(db, `organizations/${orgId}/suppliers`, supplierId);
+    await updateDoc(supplierRef, supplierData);
+  },
+
   async createPurchase(orgId: string, purchaseData: Omit<Purchase, 'id' | 'timestamp'>) {
     return await runTransaction(db, async (transaction) => {
       const purchaseRef = doc(collection(db, `organizations/${orgId}/purchases`));
@@ -44,6 +46,28 @@ export const purchaseService = {
       
       const currentBalance = supplierSnap.data().balance || 0;
       const outstandingAmount = purchaseData.totalAmount - purchaseData.paidAmount;
+
+      const lineSnapshots = await Promise.all(
+        purchaseData.items.map(async (line) => {
+          const itemRef = doc(db, `organizations/${orgId}/items`, line.itemId);
+          const summaryRef = doc(db, 'organizations', orgId, 'stockSummaries', `${line.itemId}_${purchaseData.locationId}`);
+
+          const [itemSnap, summarySnap] = await Promise.all([
+            transaction.get(itemRef),
+            transaction.get(summaryRef)
+          ]);
+
+          if (!itemSnap.exists()) throw new Error(`Item ${line.itemId} not found`);
+
+          return {
+            line,
+            itemRef,
+            summaryRef,
+            currentStock: itemSnap.data().currentStock || 0,
+            currentLocStock: summarySnap.exists() ? summarySnap.data().quantity : 0
+          };
+        })
+      );
 
       // 1. Create Purchase Record
       const purchase: Purchase = {
@@ -61,20 +85,7 @@ export const purchaseService = {
       }
 
       // 3. Update Stock for each item
-      for (const line of purchaseData.items) {
-        const itemRef = doc(db, `organizations/${orgId}/items`, line.itemId);
-        const summaryRef = doc(db, 'organizations', orgId, 'stockSummaries', `${line.itemId}_${purchaseData.locationId}`);
-        
-        const [itemSnap, summarySnap] = await Promise.all([
-          transaction.get(itemRef),
-          transaction.get(summaryRef)
-        ]);
-
-        if (!itemSnap.exists()) throw new Error(`Item ${line.itemId} not found`);
-        
-        const currentStock = itemSnap.data().currentStock || 0;
-        const currentLocStock = summarySnap.exists() ? summarySnap.data().quantity : 0;
-
+      for (const { line, itemRef, summaryRef, currentStock, currentLocStock } of lineSnapshots) {
         transaction.update(itemRef, {
           currentStock: currentStock + line.quantity,
           basePrice: line.unitCost // Update buying price
@@ -106,5 +117,11 @@ export const purchaseService = {
 
       return purchase;
     });
+  },
+
+  async getPurchases(orgId: string) {
+    const q = query(collection(db, `organizations/${orgId}/purchases`), orderBy('timestamp', 'desc'));
+    const snapshot = await getDocs(q);
+    return snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Purchase));
   }
 };

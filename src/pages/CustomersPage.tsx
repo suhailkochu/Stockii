@@ -1,26 +1,31 @@
 import React, { useEffect, useState } from 'react';
-import { useTenancy, useAuth } from '../contexts';
+import { useTenancy } from '../contexts';
 import { saleService } from '../services/saleService';
 import { Customer } from '../types';
-import { Plus, Search, User, Phone, MapPin, DollarSign, X, Loader2 } from 'lucide-react';
+import { Plus, Search, User, Phone, MapPin, X, Loader2, Pencil } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
+import { useNotifications } from '../notifications';
+
+const emptyCustomerForm: Partial<Customer> = {
+  name: '',
+  shopName: '',
+  phone: '',
+  email: '',
+  address: '',
+  route: '',
+  balance: 0,
+};
 
 export default function CustomersPage() {
   const { currentOrg } = useTenancy();
+  const { success, error: notifyError } = useNotifications();
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const [newCustomer, setNewCustomer] = useState<Partial<Customer>>({
-    name: '',
-    shopName: '',
-    phone: '',
-    email: '',
-    address: '',
-    route: '',
-    balance: 0,
-  });
+  const [editingCustomer, setEditingCustomer] = useState<Customer | null>(null);
+  const [customerForm, setCustomerForm] = useState<Partial<Customer>>(emptyCustomerForm);
 
   useEffect(() => {
     if (currentOrg) {
@@ -40,27 +45,45 @@ export default function CustomersPage() {
     }
   };
 
-  const handleCreateCustomer = async (e: React.FormEvent) => {
+  const openCreateModal = () => {
+    setEditingCustomer(null);
+    setCustomerForm(emptyCustomerForm);
+    setIsModalOpen(true);
+  };
+
+  const openEditModal = (customer: Customer) => {
+    setEditingCustomer(customer);
+    setCustomerForm({
+      name: customer.name,
+      shopName: customer.shopName || '',
+      phone: customer.phone || '',
+      email: customer.email || '',
+      address: customer.address || '',
+      route: customer.route || '',
+      balance: customer.balance || 0,
+    });
+    setIsModalOpen(true);
+  };
+
+  const handleSaveCustomer = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!currentOrg) return;
     
     setIsSubmitting(true);
     try {
-      await saleService.createCustomer(currentOrg.id, newCustomer);
+      if (editingCustomer) {
+        await saleService.updateCustomer(currentOrg.id, editingCustomer.id, customerForm);
+      } else {
+        await saleService.createCustomer(currentOrg.id, customerForm);
+      }
       await loadCustomers();
       setIsModalOpen(false);
-      setNewCustomer({
-        name: '',
-        shopName: '',
-        phone: '',
-        email: '',
-        address: '',
-        route: '',
-        balance: 0,
-      });
+      setCustomerForm(emptyCustomerForm);
+      setEditingCustomer(null);
+      success(editingCustomer ? 'Customer updated successfully' : 'Customer created successfully');
     } catch (error) {
-      console.error('Error creating customer:', error);
-      alert('Failed to create customer');
+      console.error('Error saving customer:', error);
+      notifyError(editingCustomer ? 'Failed to update customer' : 'Failed to create customer');
     } finally {
       setIsSubmitting(false);
     }
@@ -82,7 +105,7 @@ export default function CustomersPage() {
           <p className="text-sm text-zinc-500">Manage your customer database and credit balances.</p>
         </div>
         <button 
-          onClick={() => setIsModalOpen(true)}
+          onClick={openCreateModal}
           className="flex items-center justify-center gap-2 px-4 py-2 bg-orange-500 text-white rounded-xl font-medium shadow-lg shadow-orange-100 hover:bg-orange-600 transition-all"
         >
           <Plus className="w-4 h-4" />
@@ -119,11 +142,21 @@ export default function CustomersPage() {
                     <p className="text-xs text-zinc-500">{customer.shopName || 'No Shop Name'}</p>
                   </div>
                 </div>
-                <div className="text-right">
-                  <p className="text-[10px] text-zinc-400 uppercase font-bold tracking-wider">Balance</p>
-                  <p className={`text-sm font-bold ${customer.balance > 0 ? 'text-red-600' : 'text-green-600'}`}>
-                    {currentOrg?.settings.currency} {customer.balance.toFixed(2)}
-                  </p>
+                <div className="flex items-start gap-2">
+                  <div className="text-right">
+                    <p className="text-[10px] text-zinc-400 uppercase font-bold tracking-wider">Balance</p>
+                    <p className={`text-sm font-bold ${customer.balance > 0 ? 'text-red-600' : 'text-green-600'}`}>
+                      {currentOrg?.settings.currency} {customer.balance.toFixed(2)}
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => openEditModal(customer)}
+                    className="p-2 rounded-xl text-zinc-400 hover:bg-zinc-100 hover:text-orange-600"
+                    title="Edit customer"
+                  >
+                    <Pencil className="w-4 h-4" />
+                  </button>
                 </div>
               </div>
               
@@ -147,7 +180,6 @@ export default function CustomersPage() {
         )}
       </div>
 
-      {/* Add Customer Modal */}
       <AnimatePresence>
         {isModalOpen && (
           <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
@@ -165,41 +197,39 @@ export default function CustomersPage() {
               className="relative w-full max-w-lg bg-white rounded-3xl shadow-2xl overflow-hidden"
             >
               <div className="p-6 border-b border-zinc-100 flex items-center justify-between">
-                <h3 className="text-xl font-bold text-zinc-900">Add New Customer</h3>
+                <h3 className="text-xl font-bold text-zinc-900">{editingCustomer ? 'Edit Customer' : 'Add New Customer'}</h3>
                 <button onClick={() => setIsModalOpen(false)} className="p-2 hover:bg-zinc-100 rounded-full transition-colors">
                   <X className="w-5 h-5 text-zinc-400" />
                 </button>
               </div>
 
-              <form onSubmit={handleCreateCustomer} className="p-6 space-y-4">
+              <form onSubmit={handleSaveCustomer} className="p-6 space-y-4">
                 <div className="grid grid-cols-2 gap-4">
                   <div className="col-span-2">
                     <label className="block text-xs font-bold text-zinc-400 uppercase mb-1">Customer Name</label>
                     <input
                       required
                       type="text"
-                      value={newCustomer.name}
-                      onChange={(e) => setNewCustomer({ ...newCustomer, name: e.target.value })}
+                      value={customerForm.name}
+                      onChange={(e) => setCustomerForm({ ...customerForm, name: e.target.value })}
                       className="w-full px-4 py-2 bg-zinc-50 border border-zinc-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-orange-500"
-                      placeholder="e.g. John Doe"
                     />
                   </div>
                   <div className="col-span-2">
                     <label className="block text-xs font-bold text-zinc-400 uppercase mb-1">Shop Name</label>
                     <input
                       type="text"
-                      value={newCustomer.shopName}
-                      onChange={(e) => setNewCustomer({ ...newCustomer, shopName: e.target.value })}
+                      value={customerForm.shopName}
+                      onChange={(e) => setCustomerForm({ ...customerForm, shopName: e.target.value })}
                       className="w-full px-4 py-2 bg-zinc-50 border border-zinc-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-orange-500"
-                      placeholder="e.g. Acme Grocery"
                     />
                   </div>
                   <div>
                     <label className="block text-xs font-bold text-zinc-400 uppercase mb-1">Phone</label>
                     <input
                       type="text"
-                      value={newCustomer.phone}
-                      onChange={(e) => setNewCustomer({ ...newCustomer, phone: e.target.value })}
+                      value={customerForm.phone}
+                      onChange={(e) => setCustomerForm({ ...customerForm, phone: e.target.value })}
                       className="w-full px-4 py-2 bg-zinc-50 border border-zinc-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-orange-500"
                     />
                   </div>
@@ -207,17 +237,25 @@ export default function CustomersPage() {
                     <label className="block text-xs font-bold text-zinc-400 uppercase mb-1">Route</label>
                     <input
                       type="text"
-                      value={newCustomer.route}
-                      onChange={(e) => setNewCustomer({ ...newCustomer, route: e.target.value })}
+                      value={customerForm.route}
+                      onChange={(e) => setCustomerForm({ ...customerForm, route: e.target.value })}
                       className="w-full px-4 py-2 bg-zinc-50 border border-zinc-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-orange-500"
-                      placeholder="e.g. North Zone"
+                    />
+                  </div>
+                  <div className="col-span-2">
+                    <label className="block text-xs font-bold text-zinc-400 uppercase mb-1">Email</label>
+                    <input
+                      type="email"
+                      value={customerForm.email}
+                      onChange={(e) => setCustomerForm({ ...customerForm, email: e.target.value })}
+                      className="w-full px-4 py-2 bg-zinc-50 border border-zinc-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-orange-500"
                     />
                   </div>
                   <div className="col-span-2">
                     <label className="block text-xs font-bold text-zinc-400 uppercase mb-1">Address</label>
                     <textarea
-                      value={newCustomer.address}
-                      onChange={(e) => setNewCustomer({ ...newCustomer, address: e.target.value })}
+                      value={customerForm.address}
+                      onChange={(e) => setCustomerForm({ ...customerForm, address: e.target.value })}
                       className="w-full px-4 py-2 bg-zinc-50 border border-zinc-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-orange-500 h-20 resize-none"
                     />
                   </div>
@@ -230,7 +268,7 @@ export default function CustomersPage() {
                     className="w-full py-3 bg-orange-500 text-white rounded-xl font-bold shadow-lg shadow-orange-100 hover:bg-orange-600 transition-all flex items-center justify-center gap-2 disabled:opacity-50"
                   >
                     {isSubmitting ? <Loader2 className="w-5 h-5 animate-spin" /> : <Plus className="w-5 h-5" />}
-                    Create Customer
+                    {editingCustomer ? 'Save Changes' : 'Create Customer'}
                   </button>
                 </div>
               </form>

@@ -101,7 +101,45 @@ export const ReportsPage: React.FC = () => {
                     <td className="p-4 text-sm text-gray-600">{format(t.timestamp, 'MMM dd, HH:mm')}</td>
                     <td className="p-4 text-sm font-medium text-gray-900">{item?.name}</td>
                     <td className="p-4 text-sm text-gray-600 text-right">{t.quantity}</td>
-                    <td className="p-4 text-sm font-bold text-gray-900 text-right">{(t.unitSellPrice || 0 * t.quantity).toFixed(2)}</td>
+                    <td className="p-4 text-sm font-bold text-gray-900 text-right">{((t.unitSellPrice || 0) * t.quantity).toFixed(2)}</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    );
+  };
+
+  const renderPurchasesReport = () => {
+    const totalPurchases = filteredTransactions.reduce((sum, t) => sum + (t.unitCost || 0) * t.quantity, 0);
+    return (
+      <div className="space-y-6">
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+          <SummaryCard label="Total Purchases" value={totalPurchases.toFixed(2)} icon={ArrowDownLeft} color="blue" />
+          <SummaryCard label="Receipt Count" value={filteredTransactions.length.toString()} icon={FileText} color="orange" />
+          <SummaryCard label="Avg. Receipt Value" value={(totalPurchases / (filteredTransactions.length || 1)).toFixed(2)} icon={Package} color="purple" />
+        </div>
+        <div className="bg-white rounded-2xl border border-gray-200 shadow-sm overflow-hidden">
+          <table className="w-full text-left">
+            <thead className="bg-gray-50 border-b border-gray-100">
+              <tr>
+                <th className="p-4 text-xs font-mono uppercase tracking-widest text-gray-400">Date</th>
+                <th className="p-4 text-xs font-mono uppercase tracking-widest text-gray-400">Item</th>
+                <th className="p-4 text-xs font-mono uppercase tracking-widest text-gray-400 text-right">Qty</th>
+                <th className="p-4 text-xs font-mono uppercase tracking-widest text-gray-400 text-right">Amount</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-gray-50">
+              {filteredTransactions.map(t => {
+                const item = items.find(i => i.id === t.itemId);
+                return (
+                  <tr key={t.id} className="hover:bg-gray-50 transition-colors">
+                    <td className="p-4 text-sm text-gray-600">{format(t.timestamp, 'MMM dd, HH:mm')}</td>
+                    <td className="p-4 text-sm font-medium text-gray-900">{item?.name}</td>
+                    <td className="p-4 text-sm text-gray-600 text-right">{t.quantity}</td>
+                    <td className="p-4 text-sm font-bold text-gray-900 text-right">{((t.unitCost || 0) * t.quantity).toFixed(2)}</td>
                   </tr>
                 );
               })}
@@ -198,6 +236,38 @@ export const ReportsPage: React.FC = () => {
     );
   };
 
+  const renderPayablesReport = () => {
+    const totalPayables = suppliers.reduce((sum, supplier) => sum + supplier.balance, 0);
+    return (
+      <div className="space-y-6">
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <SummaryCard label="Total Payables" value={totalPayables.toFixed(2)} icon={ArrowUpRight} color="red" />
+          <SummaryCard label="Active Suppliers" value={suppliers.filter(supplier => supplier.balance > 0).length.toString()} icon={Users} color="blue" />
+        </div>
+        <div className="bg-white rounded-2xl border border-gray-200 shadow-sm overflow-hidden">
+          <table className="w-full text-left">
+            <thead className="bg-gray-50 border-b border-gray-100">
+              <tr>
+                <th className="p-4 text-xs font-mono uppercase tracking-widest text-gray-400">Supplier</th>
+                <th className="p-4 text-xs font-mono uppercase tracking-widest text-gray-400">Contact</th>
+                <th className="p-4 text-xs font-mono uppercase tracking-widest text-gray-400 text-right">Outstanding Balance</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-gray-50">
+              {suppliers.filter(supplier => supplier.balance > 0).map(supplier => (
+                <tr key={supplier.id} className="hover:bg-gray-50 transition-colors">
+                  <td className="p-4 text-sm font-medium text-gray-900">{supplier.name}</td>
+                  <td className="p-4 text-sm text-gray-600">{supplier.phone || supplier.email || 'N/A'}</td>
+                  <td className="p-4 text-sm font-bold text-red-600 text-right">{supplier.balance.toFixed(2)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    );
+  };
+
   return (
     <div className="space-y-8">
       <header className="flex flex-col md:flex-row md:items-center justify-between gap-4">
@@ -263,9 +333,10 @@ export const ReportsPage: React.FC = () => {
       ) : (
         <div className="animate-in fade-in slide-in-from-bottom-4 duration-500">
           {reportType === 'sales' && renderSalesReport()}
+          {reportType === 'purchases' && renderPurchasesReport()}
           {reportType === 'stock' && renderStockReport()}
           {reportType === 'receivables' && renderReceivablesReport()}
-          {/* Add other report renders as needed */}
+          {reportType === 'payables' && renderPayablesReport()}
         </div>
       )}
     </div>

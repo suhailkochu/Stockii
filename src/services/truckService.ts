@@ -5,13 +5,13 @@ import {
   getDoc, 
   getDocs, 
   query, 
-  where, 
   orderBy,
   updateDoc,
   deleteDoc
 } from 'firebase/firestore';
 import { db } from '../firebase';
 import { Truck, InventoryLocation } from '../types';
+import { inventoryService } from './inventoryService';
 
 export const truckService = {
   async createTruck(orgId: string, data: Omit<Truck, 'id' | 'orgId' | 'createdAt'>) {
@@ -58,17 +58,28 @@ export const truckService = {
 
   async updateTruck(orgId: string, truckId: string, data: Partial<Truck>) {
     const docRef = doc(db, 'organizations', orgId, 'trucks', truckId);
+    const truckSnap = await getDoc(docRef);
+    if (!truckSnap.exists()) {
+      throw new Error('Truck not found');
+    }
+
+    const currentTruck = truckSnap.data() as Truck;
     await updateDoc(docRef, data);
 
     // If name changed, update the location name too
-    if (data.name && data.locationId) {
-      const locRef = doc(db, 'organizations', orgId, 'locations', data.locationId);
+    if (data.name) {
+      const locRef = doc(db, 'organizations', orgId, 'locations', currentTruck.locationId);
       await updateDoc(locRef, { name: data.name });
     }
   },
 
   async deleteTruck(orgId: string, truckId: string, locationId: string) {
-    // Note: In a real app, we'd check if there's stock before deleting
+    const stock = await inventoryService.getStockByLocation(orgId, locationId);
+    const hasStock = stock.some(summary => summary.quantity > 0);
+    if (hasStock) {
+      throw new Error('Unload all truck stock before deleting this truck');
+    }
+
     await deleteDoc(doc(db, 'organizations', orgId, 'trucks', truckId));
     await deleteDoc(doc(db, 'organizations', orgId, 'locations', locationId));
   }

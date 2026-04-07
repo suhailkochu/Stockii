@@ -5,10 +5,12 @@ import { saleService } from '../services/saleService';
 import { Item, Customer, InventoryLocation, ReturnLine } from '../types';
 import { Search, Plus, Trash2, Loader2, RotateCcw } from 'lucide-react';
 import { motion } from 'motion/react';
+import { useNotifications } from '../notifications';
 
 export default function ReturnsPage() {
   const { currentOrg } = useTenancy();
   const { user } = useAuth();
+  const { success, error: notifyError } = useNotifications();
   
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [items, setItems] = useState<Item[]>([]);
@@ -78,12 +80,12 @@ export default function ReturnsPage() {
         });
       }
       
-      alert('Return processed successfully. Stock updated.');
+      success('Return processed successfully. Stock updated.');
       setReturnItems([]);
       setSelectedCustomer('');
       setReason('');
     } catch (error: any) {
-      alert(error.message || 'Failed to process return');
+      notifyError(error.message || 'Failed to process return');
     } finally {
       setLoading(false);
     }

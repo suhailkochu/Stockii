@@ -1,18 +1,21 @@
 import React, { useState, useEffect } from 'react';
 import { useTenancy, useAuth } from '../contexts';
 import { truckService } from '../services/truckService';
-import { Truck, User } from '../types';
-import { Plus, Truck as TruckIcon, User as UserIcon, MoreVertical, Trash2, Edit2, Package } from 'lucide-react';
+import { Truck } from '../types';
+import { Plus, Truck as TruckIcon, User as UserIcon, Trash2, Edit2, Package } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import { motion, AnimatePresence } from 'motion/react';
+import { useNotifications } from '../notifications';
 
 export default function TrucksPage() {
   const { currentOrg } = useTenancy();
   const { user } = useAuth();
+  const { success, error: notifyError } = useNotifications();
   const [trucks, setTrucks] = useState<Truck[]>([]);
   const [loading, setLoading] = useState(true);
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [newTruck, setNewTruck] = useState({ name: '', plateNumber: '', driverId: '' });
+  const [editingTruck, setEditingTruck] = useState<Truck | null>(null);
 
   useEffect(() => {
     if (currentOrg) {
@@ -36,15 +39,26 @@ export default function TrucksPage() {
     e.preventDefault();
     if (!currentOrg) return;
     try {
-      await truckService.createTruck(currentOrg.id, {
-        ...newTruck,
-        isActive: true
-      });
+      if (editingTruck) {
+        await truckService.updateTruck(currentOrg.id, editingTruck.id, {
+          name: newTruck.name,
+          plateNumber: newTruck.plateNumber,
+          driverId: newTruck.driverId || undefined,
+        });
+      } else {
+        await truckService.createTruck(currentOrg.id, {
+          ...newTruck,
+          isActive: true
+        });
+      }
       setIsModalOpen(false);
       setNewTruck({ name: '', plateNumber: '', driverId: '' });
+      setEditingTruck(null);
       fetchTrucks();
+      success(editingTruck ? 'Truck updated successfully.' : 'Truck created successfully.');
     } catch (error) {
       console.error('Error creating truck:', error);
+      notifyError(editingTruck ? 'Failed to update truck' : 'Failed to create truck');
     }
   };
 
@@ -53,9 +67,20 @@ export default function TrucksPage() {
     try {
       await truckService.deleteTruck(currentOrg.id, truckId, locationId);
       fetchTrucks();
-    } catch (error) {
+    } catch (error: any) {
       console.error('Error deleting truck:', error);
+      notifyError(error.message || 'Failed to delete truck');
     }
+  };
+
+  const openEditModal = (truck: Truck) => {
+    setEditingTruck(truck);
+    setNewTruck({
+      name: truck.name,
+      plateNumber: truck.plateNumber || '',
+      driverId: truck.driverId || '',
+    });
+    setIsModalOpen(true);
   };
 
   if (loading) return <div className="p-8 text-center text-zinc-500">Loading trucks...</div>;
@@ -89,6 +114,12 @@ export default function TrucksPage() {
                 <TruckIcon className="w-6 h-6" />
               </div>
               <div className="flex items-center gap-2">
+                <button
+                  onClick={() => openEditModal(truck)}
+                  className="p-2 text-zinc-400 hover:text-orange-600 hover:bg-orange-50 rounded-lg transition-all"
+                >
+                  <Edit2 className="w-4 h-4" />
+                </button>
                 <button 
                   onClick={() => handleDeleteTruck(truck.id, truck.locationId)}
                   className="p-2 text-zinc-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-all"
@@ -145,7 +176,7 @@ export default function TrucksPage() {
               className="bg-white w-full max-w-md rounded-2xl shadow-xl overflow-hidden"
             >
               <div className="p-6 border-b border-zinc-100">
-                <h3 className="text-xl font-bold text-zinc-900">Add New Truck</h3>
+                <h3 className="text-xl font-bold text-zinc-900">{editingTruck ? 'Edit Truck' : 'Add New Truck'}</h3>
               </div>
               <form onSubmit={handleCreateTruck} className="p-6 space-y-4">
                 <div className="space-y-2">
@@ -172,7 +203,11 @@ export default function TrucksPage() {
                 <div className="flex gap-3 pt-4">
                   <button
                     type="button"
-                    onClick={() => setIsModalOpen(false)}
+                    onClick={() => {
+                      setIsModalOpen(false);
+                      setEditingTruck(null);
+                      setNewTruck({ name: '', plateNumber: '', driverId: '' });
+                    }}
                     className="flex-1 px-4 py-2 bg-zinc-100 text-zinc-700 rounded-xl hover:bg-zinc-200 transition-colors font-medium"
                   >
                     Cancel
@@ -181,7 +216,7 @@ export default function TrucksPage() {
                     type="submit"
                     className="flex-1 px-4 py-2 bg-orange-600 text-white rounded-xl hover:bg-orange-700 transition-colors font-medium"
                   >
-                    Create Truck
+                    {editingTruck ? 'Save Changes' : 'Create Truck'}
                   </button>
                 </div>
               </form>
