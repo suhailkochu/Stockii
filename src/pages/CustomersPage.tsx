@@ -1,10 +1,12 @@
 import React, { useEffect, useState } from 'react';
 import { useTenancy } from '../contexts';
+import { useAuth } from '../contexts';
 import { saleService } from '../services/saleService';
 import { Customer } from '../types';
-import { Plus, Search, User, Phone, MapPin, X, Loader2, Pencil } from 'lucide-react';
+import { Plus, Search, User, Phone, MapPin, X, Loader2, Pencil, Wallet, HandCoins, Trash2 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { useNotifications } from '../notifications';
+import { formatCurrency } from '../utils/currency';
 
 const emptyCustomerForm: Partial<Customer> = {
   name: '',
@@ -18,6 +20,7 @@ const emptyCustomerForm: Partial<Customer> = {
 
 export default function CustomersPage() {
   const { currentOrg } = useTenancy();
+  const { user } = useAuth();
   const { success, error: notifyError } = useNotifications();
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [loading, setLoading] = useState(true);
@@ -26,6 +29,11 @@ export default function CustomersPage() {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [editingCustomer, setEditingCustomer] = useState<Customer | null>(null);
   const [customerForm, setCustomerForm] = useState<Partial<Customer>>(emptyCustomerForm);
+  const [balanceCustomer, setBalanceCustomer] = useState<Customer | null>(null);
+  const [balanceAction, setBalanceAction] = useState<'collect-payment' | 'add-due' | 'write-off'>('collect-payment');
+  const [balanceAmount, setBalanceAmount] = useState(0);
+  const [balanceMethod, setBalanceMethod] = useState<'cash' | 'bank' | 'cheque'>('cash');
+  const [balanceNotes, setBalanceNotes] = useState('');
 
   useEffect(() => {
     if (currentOrg) {
@@ -95,6 +103,79 @@ export default function CustomersPage() {
     c.phone?.includes(searchTerm)
   );
 
+  const openBalanceModal = (customer: Customer, action: 'collect-payment' | 'add-due' | 'write-off' = 'collect-payment') => {
+    setBalanceCustomer(customer);
+    setBalanceAction(action);
+    setBalanceAmount(0);
+    setBalanceMethod('cash');
+    setBalanceNotes('');
+  };
+
+  const closeBalanceModal = () => {
+    setBalanceCustomer(null);
+    setBalanceAmount(0);
+    setBalanceNotes('');
+  };
+
+  const handleDeleteCustomer = async (customer: Customer) => {
+    if (!currentOrg) return;
+    if (customer.balance > 0) {
+      notifyError('Clear the pending amount before deleting this customer.');
+      return;
+    }
+
+    const confirmed = window.confirm(`Delete ${customer.name}? This cannot be undone.`);
+    if (!confirmed) return;
+
+    setIsSubmitting(true);
+    try {
+      await saleService.deleteCustomer(currentOrg.id, customer.id);
+      await loadCustomers();
+      success('Customer deleted successfully');
+    } catch (error: any) {
+      console.error('Error deleting customer:', error);
+      notifyError(error.message || 'Failed to delete customer');
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  const nextBalance = balanceCustomer
+    ? balanceAction === 'add-due'
+      ? balanceCustomer.balance + balanceAmount
+      : Math.max(balanceCustomer.balance - balanceAmount, 0)
+    : 0;
+
+  const handleSaveBalance = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!currentOrg || !user || !balanceCustomer) return;
+
+    setIsSubmitting(true);
+    try {
+      await saleService.createCustomerBalanceTransaction(currentOrg.id, user.uid, {
+        customerId: balanceCustomer.id,
+        amount: balanceAmount,
+        action: balanceAction,
+        paymentMethod: balanceMethod,
+        notes: balanceNotes,
+      });
+      await loadCustomers();
+      closeBalanceModal();
+      success(
+        balanceAction === 'add-due'
+          ? 'Customer due increased successfully'
+          : balanceAction === 'write-off'
+            ? 'Customer balance reduced successfully'
+            : 'Payment collected successfully'
+      );
+    } catch (error: any) {
+      console.error('Error updating customer balance:', error);
+      notifyError(error.message || 'Failed to update customer balance');
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
   if (loading) return <div className="p-8 text-center">Loading customers...</div>;
 
   return (
@@ -146,7 +227,7 @@ export default function CustomersPage() {
                   <div className="text-right">
                     <p className="text-[10px] text-zinc-400 uppercase font-bold tracking-wider">Balance</p>
                     <p className={`text-sm font-bold ${customer.balance > 0 ? 'text-red-600' : 'text-green-600'}`}>
-                      {currentOrg?.settings.currency} {customer.balance.toFixed(2)}
+                      {formatCurrency(customer.balance, currentOrg?.settings.currency)}
                     </p>
                   </div>
                   <button
@@ -156,6 +237,15 @@ export default function CustomersPage() {
                     title="Edit customer"
                   >
                     <Pencil className="w-4 h-4" />
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleDeleteCustomer(customer)}
+                    disabled={customer.balance > 0 || isSubmitting}
+                    className="p-2 rounded-xl text-zinc-400 hover:bg-zinc-100 hover:text-red-600 disabled:cursor-not-allowed disabled:opacity-40"
+                    title={customer.balance > 0 ? 'Pending amount must be zero to delete' : 'Delete customer'}
+                  >
+                    <Trash2 className="w-4 h-4" />
                   </button>
                 </div>
               </div>
@@ -174,11 +264,161 @@ export default function CustomersPage() {
                     Route: {customer.route}
                   </div>
                 )}
+                <div className="flex flex-wrap gap-2 pt-3">
+                  <button
+                    type="button"
+                    onClick={() => openBalanceModal(customer, 'collect-payment')}
+                    className="inline-flex items-center gap-1 rounded-xl bg-green-50 px-3 py-2 text-xs font-semibold text-green-700 hover:bg-green-100"
+                  >
+                    <HandCoins className="h-3.5 w-3.5" />
+                    Collect
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => openBalanceModal(customer, 'add-due')}
+                    className="inline-flex items-center gap-1 rounded-xl bg-orange-50 px-3 py-2 text-xs font-semibold text-orange-700 hover:bg-orange-100"
+                  >
+                    <Wallet className="h-3.5 w-3.5" />
+                    Add Due
+                  </button>
+                  {customer.balance > 0 && (
+                    <button
+                      type="button"
+                      onClick={() => openBalanceModal(customer, 'write-off')}
+                      className="inline-flex items-center gap-1 rounded-xl bg-zinc-100 px-3 py-2 text-xs font-semibold text-zinc-700 hover:bg-zinc-200"
+                    >
+                      Reduce Balance
+                    </button>
+                  )}
+                </div>
               </div>
             </div>
           ))
         )}
       </div>
+
+      <AnimatePresence>
+        {balanceCustomer && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              onClick={closeBalanceModal}
+              className="absolute inset-0 bg-zinc-900/40 backdrop-blur-sm"
+            />
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95, y: 20 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.95, y: 20 }}
+              className="relative w-full max-w-lg overflow-hidden rounded-3xl bg-white shadow-2xl"
+            >
+              <div className="flex items-center justify-between border-b border-zinc-100 p-6">
+                <div>
+                  <h3 className="text-xl font-bold text-zinc-900">Manage Customer Balance</h3>
+                  <p className="text-sm text-zinc-500">{balanceCustomer.name}</p>
+                </div>
+                <button onClick={closeBalanceModal} className="p-2 hover:bg-zinc-100 rounded-full transition-colors">
+                  <X className="w-5 h-5 text-zinc-400" />
+                </button>
+              </div>
+
+              <form onSubmit={handleSaveBalance} className="space-y-4 p-6">
+                <div className="rounded-2xl border border-zinc-200 bg-zinc-50 p-4">
+                  <div className="flex items-center justify-between text-sm">
+                    <span className="text-zinc-500">Current Balance</span>
+                    <span className={`font-bold ${balanceCustomer.balance > 0 ? 'text-red-600' : 'text-green-600'}`}>
+                      {formatCurrency(balanceCustomer.balance, currentOrg?.settings.currency)}
+                    </span>
+                  </div>
+                  <div className="mt-2 flex items-center justify-between text-sm">
+                    <span className="text-zinc-500">Balance After Action</span>
+                    <span className={`font-bold ${nextBalance > 0 ? 'text-red-600' : 'text-green-600'}`}>
+                      {formatCurrency(nextBalance, currentOrg?.settings.currency)}
+                    </span>
+                  </div>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-bold text-zinc-400 uppercase mb-2">Action</label>
+                  <div className="grid grid-cols-3 gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setBalanceAction('collect-payment')}
+                      className={`rounded-xl border px-3 py-2 text-xs font-semibold ${balanceAction === 'collect-payment' ? 'border-green-500 bg-green-50 text-green-700' : 'border-zinc-200 text-zinc-600'}`}
+                    >
+                      Collect
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setBalanceAction('add-due')}
+                      className={`rounded-xl border px-3 py-2 text-xs font-semibold ${balanceAction === 'add-due' ? 'border-orange-500 bg-orange-50 text-orange-700' : 'border-zinc-200 text-zinc-600'}`}
+                    >
+                      Add Due
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setBalanceAction('write-off')}
+                      className={`rounded-xl border px-3 py-2 text-xs font-semibold ${balanceAction === 'write-off' ? 'border-zinc-900 bg-zinc-100 text-zinc-900' : 'border-zinc-200 text-zinc-600'}`}
+                    >
+                      Reduce
+                    </button>
+                  </div>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-bold text-zinc-400 uppercase mb-1">Amount</label>
+                  <input
+                    required
+                    type="number"
+                    min="0.01"
+                    step="0.01"
+                    max={balanceAction === 'add-due' ? undefined : balanceCustomer.balance || 0}
+                    value={balanceAmount || ''}
+                    onChange={(e) => setBalanceAmount(Number(e.target.value))}
+                    className="w-full px-4 py-2 bg-zinc-50 border border-zinc-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-orange-500"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-bold text-zinc-400 uppercase mb-1">Method</label>
+                  <div className="grid grid-cols-3 gap-2">
+                    {(['cash', 'bank', 'cheque'] as const).map((method) => (
+                      <button
+                        key={method}
+                        type="button"
+                        onClick={() => setBalanceMethod(method)}
+                        className={`rounded-xl border px-3 py-2 text-xs font-semibold uppercase ${balanceMethod === method ? 'border-orange-500 bg-orange-50 text-orange-700' : 'border-zinc-200 text-zinc-600'}`}
+                      >
+                        {method}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-bold text-zinc-400 uppercase mb-1">Notes</label>
+                  <textarea
+                    value={balanceNotes}
+                    onChange={(e) => setBalanceNotes(e.target.value)}
+                    className="w-full px-4 py-2 bg-zinc-50 border border-zinc-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-orange-500 h-24 resize-none"
+                    placeholder="Reason, receipt reference, or adjustment details"
+                  />
+                </div>
+
+                <button
+                  type="submit"
+                  disabled={isSubmitting || balanceAmount <= 0}
+                  className="w-full py-3 bg-orange-500 text-white rounded-xl font-bold shadow-lg shadow-orange-100 hover:bg-orange-600 transition-all flex items-center justify-center gap-2 disabled:opacity-50"
+                >
+                  {isSubmitting ? <Loader2 className="w-5 h-5 animate-spin" /> : <Wallet className="w-5 h-5" />}
+                  Save Balance Action
+                </button>
+              </form>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
 
       <AnimatePresence>
         {isModalOpen && (

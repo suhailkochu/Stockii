@@ -6,6 +6,7 @@ import { Item, Customer, InventoryLocation, ReturnLine } from '../types';
 import { Search, Plus, Trash2, Loader2, RotateCcw } from 'lucide-react';
 import { motion } from 'motion/react';
 import { useNotifications } from '../notifications';
+import { AppSelect } from '../components/AppSelect';
 
 export default function ReturnsPage() {
   const { currentOrg } = useTenancy();
@@ -15,6 +16,7 @@ export default function ReturnsPage() {
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [items, setItems] = useState<Item[]>([]);
   const [locations, setLocations] = useState<InventoryLocation[]>([]);
+  const [eligibleReturns, setEligibleReturns] = useState<Record<string, { sold: number; returned: number; remaining: number }>>({});
   
   const [selectedCustomer, setSelectedCustomer] = useState('');
   const [selectedLocation, setSelectedLocation] = useState('');
@@ -22,6 +24,7 @@ export default function ReturnsPage() {
   const [reason, setReason] = useState('');
   const [loading, setLoading] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
+  const multiLocationEnabled = currentOrg?.settings?.multiLocationEnabled ?? false;
 
   useEffect(() => {
     if (currentOrg) {
@@ -35,9 +38,42 @@ export default function ReturnsPage() {
     }
   }, [currentOrg]);
 
+  useEffect(() => {
+    if (!currentOrg || !selectedCustomer) {
+      setEligibleReturns({});
+      setReturnItems([]);
+      return;
+    }
+
+    saleService.getCustomerReturnEligibility(currentOrg.id, selectedCustomer)
+      .then((eligibility) => {
+        setEligibleReturns(eligibility);
+        setReturnItems((currentItems) =>
+          currentItems
+            .map((line) => {
+              const remaining = eligibility[line.itemId || '']?.remaining || 0;
+              if (remaining <= 0) return null;
+              const quantity = Math.min(Math.max(1, line.quantity || 1), remaining);
+              return {
+                ...line,
+                quantity,
+                subtotal: quantity * (line.unitPrice || 0),
+              };
+            })
+            .filter(Boolean) as Partial<ReturnLine>[]
+        );
+      })
+      .catch((error) => {
+        console.error('Error loading return eligibility:', error);
+        setEligibleReturns({});
+      });
+  }, [currentOrg, selectedCustomer]);
+
   const addItem = (item: Item) => {
     const existing = returnItems.find(ri => ri.itemId === item.id);
     if (existing) return;
+    const remaining = eligibleReturns[item.id]?.remaining || 0;
+    if (remaining <= 0) return;
 
     setReturnItems([...returnItems, {
       itemId: item.id,
@@ -51,6 +87,10 @@ export default function ReturnsPage() {
   const updateItem = (index: number, updates: Partial<ReturnLine>) => {
     const newItems = [...returnItems];
     const item = { ...newItems[index], ...updates };
+    const maxReturnable = eligibleReturns[item.itemId || '']?.remaining || 0;
+    if (item.quantity) {
+      item.quantity = Math.min(Math.max(1, item.quantity), maxReturnable);
+    }
     if (item.quantity && item.unitPrice) {
       item.subtotal = item.quantity * item.unitPrice;
     }
@@ -68,17 +108,12 @@ export default function ReturnsPage() {
 
     setLoading(true);
     try {
-      // For each item, create a CUSTOMER_RETURN transaction
-      for (const line of returnItems) {
-        await inventoryService.createTransaction(currentOrg.id, user.uid, {
-          itemId: line.itemId!,
-          type: 'CUSTOMER_RETURN',
-          quantity: line.quantity!,
-          destinationLocationId: selectedLocation,
-          unitSellPrice: line.unitPrice,
-          notes: `Customer Return: ${reason}`
-        });
-      }
+      await saleService.createCustomerReturn(currentOrg.id, user.uid, {
+        customerId: selectedCustomer,
+        locationId: selectedLocation,
+        items: returnItems as ReturnLine[],
+        reason,
+      });
       
       success('Return processed successfully. Stock updated.');
       setReturnItems([]);
@@ -92,8 +127,12 @@ export default function ReturnsPage() {
   };
 
   const filteredItems = items.filter(item => 
-    item.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    item.sku?.toLowerCase().includes(searchTerm.toLowerCase())
+    selectedCustomer &&
+    (eligibleReturns[item.id]?.remaining || 0) > 0 &&
+    (
+      item.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      item.sku?.toLowerCase().includes(searchTerm.toLowerCase())
+    )
   );
 
   return (
@@ -107,33 +146,39 @@ export default function ReturnsPage() {
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           <div className="bg-white p-4 rounded-2xl border border-zinc-200 shadow-sm">
             <label className="block text-xs font-bold text-zinc-400 uppercase mb-2">Customer</label>
-            <select
+            <AppSelect
               value={selectedCustomer}
-              onChange={(e) => setSelectedCustomer(e.target.value)}
-              className="w-full p-2 bg-zinc-50 border border-zinc-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-orange-500"
-              required
-            >
-              <option value="">Select Customer</option>
-              {customers.map(c => (
-                <option key={c.id} value={c.id}>{c.name}</option>
-              ))}
-            </select>
+              onChange={setSelectedCustomer}
+              placeholder="Select Customer"
+              searchable
+              options={[
+                { value: '', label: 'Select Customer' },
+                ...customers.map((customer) => ({
+                  value: customer.id,
+                  label: customer.name,
+                  keywords: `${customer.shopName || ''} ${customer.phone || ''}`,
+                })),
+              ]}
+            />
           </div>
 
-          <div className="bg-white p-4 rounded-2xl border border-zinc-200 shadow-sm">
-            <label className="block text-xs font-bold text-zinc-400 uppercase mb-2">Return To Location</label>
-            <select
-              value={selectedLocation}
-              onChange={(e) => setSelectedLocation(e.target.value)}
-              className="w-full p-2 bg-zinc-50 border border-zinc-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-orange-500"
-              required
-            >
-              <option value="">Select Location</option>
-              {locations.map(l => (
-                <option key={l.id} value={l.id}>{l.name} ({l.type})</option>
-              ))}
-            </select>
-          </div>
+          {multiLocationEnabled && (
+            <div className="bg-white p-4 rounded-2xl border border-zinc-200 shadow-sm">
+              <label className="block text-xs font-bold text-zinc-400 uppercase mb-2">Return To Location</label>
+              <AppSelect
+                value={selectedLocation}
+                onChange={setSelectedLocation}
+                placeholder="Select Location"
+                options={[
+                  { value: '', label: 'Select Location' },
+                  ...locations.map((location) => ({
+                    value: location.id,
+                    label: `${location.name} (${location.type})`,
+                  })),
+                ]}
+              />
+            </div>
+          )}
         </div>
 
         <div className="bg-white p-6 rounded-2xl border border-zinc-200 shadow-sm space-y-4">
@@ -141,9 +186,10 @@ export default function ReturnsPage() {
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-zinc-400 w-4 h-4" />
             <input
               type="text"
-              placeholder="Search items to return..."
+              placeholder={selectedCustomer ? 'Search items to return...' : 'Select a customer first'}
               value={searchTerm}
               onChange={(e) => setSearchTerm(e.target.value)}
+              disabled={!selectedCustomer}
               className="w-full pl-10 pr-4 py-2 bg-zinc-50 border border-zinc-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-orange-500"
             />
             {searchTerm && (
@@ -156,9 +202,16 @@ export default function ReturnsPage() {
                     className="w-full text-left px-4 py-3 hover:bg-zinc-50 border-b border-zinc-100 last:border-0"
                   >
                     <div className="font-bold text-zinc-900">{item.name}</div>
-                    <div className="text-xs text-zinc-500">SKU: {item.sku || 'N/A'}</div>
+                    <div className="text-xs text-zinc-500">
+                      SKU: {item.sku || 'N/A'} | Max returnable: {eligibleReturns[item.id]?.remaining || 0}
+                    </div>
                   </button>
                 ))}
+                {selectedCustomer && filteredItems.length === 0 && (
+                  <div className="px-4 py-3 text-sm text-zinc-500">
+                    No eligible return items found for this customer.
+                  </div>
+                )}
               </div>
             )}
           </div>
@@ -166,16 +219,19 @@ export default function ReturnsPage() {
           <div className="space-y-3">
             {returnItems.map((ri, index) => {
               const item = items.find(i => i.id === ri.itemId);
+              const maxReturnable = eligibleReturns[ri.itemId || '']?.remaining || 0;
               return (
                 <div key={ri.itemId} className="flex items-center gap-4 p-4 bg-zinc-50 rounded-xl border border-zinc-100">
                   <div className="flex-1">
                     <p className="font-bold text-zinc-900">{item?.name}</p>
-                    <p className="text-xs text-zinc-500">Unit Price: {ri.unitPrice}</p>
+                    <p className="text-xs text-zinc-500">Unit Price: {ri.unitPrice} | Max returnable: {maxReturnable}</p>
                   </div>
                   <div className="w-24">
                     <label className="block text-[10px] uppercase text-zinc-400 font-bold mb-1">Qty</label>
                     <input
                       type="number"
+                      min="1"
+                      max={maxReturnable}
                       value={ri.quantity}
                       onChange={(e) => updateItem(index, { quantity: Number(e.target.value) })}
                       className="w-full p-2 bg-white border border-zinc-200 rounded-lg text-center font-bold"

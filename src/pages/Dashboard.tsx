@@ -21,6 +21,9 @@ import {
 } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import { format, startOfDay, endOfDay, startOfMonth, isWithinInterval } from 'date-fns';
+import { formatCurrency } from '../utils/currency';
+
+type PeriodFilter = 'today' | '7d' | '30d';
 
 export const Dashboard: React.FC = () => {
   const { currentOrg, membership } = useTenancy();
@@ -30,6 +33,7 @@ export const Dashboard: React.FC = () => {
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [suppliers, setSuppliers] = useState<Supplier[]>([]);
   const [loading, setLoading] = useState(true);
+  const [periodFilter, setPeriodFilter] = useState<PeriodFilter>('7d');
 
   useEffect(() => {
     const fetchData = async () => {
@@ -64,27 +68,105 @@ export const Dashboard: React.FC = () => {
 
   // Calculations
   const now = new Date();
-  const todaySales = transactions
-    .filter(t => t.type === 'SALE_OUT' && isWithinInterval(t.timestamp, { start: startOfDay(now), end: endOfDay(now) }))
+  const periodStart = (() => {
+    switch (periodFilter) {
+      case 'today':
+        return startOfDay(now);
+      case '30d':
+        return new Date(now.getTime() - 29 * 24 * 60 * 60 * 1000);
+      case '7d':
+      default:
+        return new Date(now.getTime() - 6 * 24 * 60 * 60 * 1000);
+    }
+  })();
+
+  const periodTransactions = transactions.filter((transaction) =>
+    isWithinInterval(transaction.timestamp, { start: periodStart, end: endOfDay(now) })
+  );
+
+  const filteredSalesValue = periodTransactions
+    .filter(t => t.type === 'SALE_OUT')
     .reduce((sum, t) => sum + (t.unitSellPrice || 0) * t.quantity, 0);
 
-  const monthSales = transactions
-    .filter(t => t.type === 'SALE_OUT' && isWithinInterval(t.timestamp, { start: startOfMonth(now), end: endOfDay(now) }))
-    .reduce((sum, t) => sum + (t.unitSellPrice || 0) * t.quantity, 0);
+  const filteredPurchasesValue = periodTransactions
+    .filter(t => t.type === 'PURCHASE_IN')
+    .reduce((sum, t) => sum + (t.unitCost || 0) * t.quantity, 0);
 
   const lowStockItems = items.filter(i => i.currentStock <= i.reorderThreshold);
   const totalReceivables = customers.reduce((sum, c) => sum + c.balance, 0);
   const totalPayables = suppliers.reduce((sum, s) => sum + s.balance, 0);
   const stockValue = items.reduce((sum, i) => sum + i.currentStock * i.basePrice, 0);
 
+  const getTxLabel = (tx: InventoryTransaction) => {
+    switch (tx.type) {
+      case 'ADJUSTMENT_OUT':
+        return 'Item Removed';
+      case 'ADJUSTMENT_IN':
+        return 'Item Added';
+      default:
+        return tx.type.replace(/_/g, ' ');
+    }
+  };
+
+  const getSignedQuantity = (tx: InventoryTransaction) => {
+    switch (tx.type) {
+      case 'SALE_OUT':
+      case 'DAMAGE_OUT':
+      case 'ADJUSTMENT_OUT':
+        return -tx.quantity;
+      case 'PURCHASE_IN':
+      case 'CUSTOMER_RETURN':
+      case 'ADJUSTMENT_IN':
+        return tx.quantity;
+      default:
+        return tx.quantity;
+    }
+  };
+
   const renderOwnerDashboard = () => (
     <div className="space-y-8">
-      {/* Stats Grid */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-        <StatCard label="Today's Sales" value={todaySales.toFixed(2)} trend="+12%" icon={TrendingUp} color="blue" />
-        <StatCard label="Receivables" value={totalReceivables.toFixed(2)} icon={ArrowDownLeft} color="orange" />
-        <StatCard label="Payables" value={totalPayables.toFixed(2)} icon={ArrowUpRight} color="red" />
-        <StatCard label="Stock Value" value={stockValue.toFixed(2)} icon={Package} color="purple" />
+      <div className="rounded-2xl border border-zinc-200 bg-white p-4 shadow-sm sm:p-5">
+        <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <div>
+            <h3 className="text-sm font-bold text-zinc-900">Overview</h3>
+            <p className="text-xs text-zinc-500">Compact snapshot of sales, dues, and inventory.</p>
+          </div>
+          <div className="inline-flex rounded-2xl bg-zinc-100 p-1">
+            {[
+              { key: 'today', label: 'Today' },
+              { key: '7d', label: '7D' },
+              { key: '30d', label: '30D' },
+            ].map((option) => (
+              <button
+                key={option.key}
+                type="button"
+                onClick={() => setPeriodFilter(option.key as PeriodFilter)}
+                className={`rounded-xl px-3 py-1.5 text-xs font-semibold transition-colors ${
+                  periodFilter === option.key ? 'bg-white text-orange-600 shadow-sm' : 'text-zinc-600'
+                }`}
+              >
+                {option.label}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        <div className="grid grid-cols-2 gap-3">
+          <StatCard
+            label={periodFilter === 'today' ? "Today's Sales" : `Sales (${periodFilter.toUpperCase()})`}
+            value={formatCurrency(filteredSalesValue, currentOrg?.settings.currency)}
+            icon={TrendingUp}
+            color="blue"
+          />
+          <StatCard
+            label={periodFilter === 'today' ? "Today's Purchases" : `Purchases (${periodFilter.toUpperCase()})`}
+            value={formatCurrency(filteredPurchasesValue, currentOrg?.settings.currency)}
+            icon={ArrowDownLeft}
+            color="orange"
+          />
+          <StatCard label="Receivables" value={formatCurrency(totalReceivables, currentOrg?.settings.currency)} icon={ArrowDownLeft} color="red" />
+          <StatCard label="Stock Value" value={formatCurrency(stockValue, currentOrg?.settings.currency)} icon={Package} color="purple" />
+        </div>
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
@@ -95,31 +177,33 @@ export const Dashboard: React.FC = () => {
             <Link to="/transactions" className="text-xs font-medium text-orange-600 hover:underline">View All</Link>
           </div>
           <div className="divide-y divide-zinc-50">
-            {transactions.slice(0, 5).map((t) => {
+            {periodTransactions.slice(0, 5).map((t) => {
               const item = items.find(i => i.id === t.itemId);
+              const signedQuantity = getSignedQuantity(t);
+              const isOutbound = signedQuantity < 0;
               return (
                 <div key={t.id} className="p-4 flex items-center justify-between hover:bg-zinc-50 transition-colors">
                   <div className="flex items-center gap-3">
                     <div className={`w-10 h-10 rounded-xl flex items-center justify-center ${
-                      t.type === 'SALE_OUT' ? 'bg-green-50 text-green-600' : 'bg-blue-50 text-blue-600'
+                      isOutbound ? 'bg-red-50 text-red-600' : 'bg-blue-50 text-blue-600'
                     }`}>
-                      {t.type === 'SALE_OUT' ? <ArrowUpRight className="w-5 h-5" /> : <ArrowDownLeft className="w-5 h-5" />}
+                      {isOutbound ? <ArrowUpRight className="w-5 h-5" /> : <ArrowDownLeft className="w-5 h-5" />}
                     </div>
                     <div>
                       <p className="text-sm font-bold text-zinc-900">{item?.name}</p>
-                      <p className="text-xs text-zinc-500 font-mono uppercase">{t.type.replace('_', ' ')}</p>
+                      <p className="text-xs text-zinc-500 font-mono uppercase">{getTxLabel(t)}</p>
                     </div>
                   </div>
                   <div className="text-right">
-                    <p className={`text-sm font-bold ${t.type === 'SALE_OUT' ? 'text-green-600' : 'text-blue-600'}`}>
-                      {t.type === 'SALE_OUT' ? '-' : '+'}{t.quantity} {item?.unit}
+                    <p className={`text-sm font-bold ${isOutbound ? 'text-red-600' : 'text-blue-600'}`}>
+                      {signedQuantity > 0 ? '+' : ''}{signedQuantity} {item?.unit}
                     </p>
-                    <p className="text-[10px] text-zinc-400 font-mono uppercase">{format(t.timestamp, 'HH:mm')}</p>
+                    <p className="text-[10px] text-zinc-400 font-mono uppercase">{format(t.timestamp, 'dd MMM, HH:mm')}</p>
                   </div>
                 </div>
               );
             })}
-            {transactions.length === 0 && (
+            {periodTransactions.length === 0 && (
               <div className="p-12 text-center text-zinc-400 italic">No recent activity.</div>
             )}
           </div>
@@ -169,7 +253,7 @@ export const Dashboard: React.FC = () => {
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
         <StatCard label="Total Items" value={items.length.toString()} icon={Package} color="blue" />
         <StatCard label="Low Stock" value={lowStockItems.length.toString()} icon={AlertTriangle} color="red" />
-        <StatCard label="Recent Movements" value={transactions.length.toString()} icon={Clock} color="zinc" />
+        <StatCard label="Recent Movements" value={periodTransactions.length.toString()} icon={Clock} color="zinc" />
       </div>
       {/* Add warehouse specific views here */}
       {renderOwnerDashboard()} {/* Fallback for now */}
@@ -200,15 +284,15 @@ const StatCard = ({ label, value, trend, icon: Icon, color }: any) => {
   };
 
   return (
-    <div className="bg-white p-6 rounded-2xl border border-zinc-200 shadow-sm">
-      <div className="flex justify-between items-start mb-4">
-        <div className={`p-2 rounded-xl ${colors[color].split(' ')[2]} ${colors[color].split(' ')[1]}`}>
+    <div className="rounded-2xl border border-zinc-100 bg-zinc-50 p-4">
+      <div className="mb-3 flex items-start justify-between gap-2">
+        <div className={`rounded-xl p-2 ${colors[color].split(' ')[2]} ${colors[color].split(' ')[1]}`}>
           <Icon className="w-5 h-5" />
         </div>
         {trend && <span className="text-xs font-medium text-green-600">{trend}</span>}
       </div>
-      <p className="text-xs font-mono uppercase tracking-wider text-zinc-400 mb-1">{label}</p>
-      <span className="text-2xl font-bold text-zinc-900">{value}</span>
+      <p className="mb-1 text-[10px] font-mono uppercase tracking-wider text-zinc-400">{label}</p>
+      <span className="text-lg font-bold text-zinc-900 sm:text-xl">{value}</span>
     </div>
   );
 };

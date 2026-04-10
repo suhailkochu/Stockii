@@ -1,5 +1,5 @@
 import React from 'react';
-import { BrowserRouter, Routes, Route, Link, useLocation } from 'react-router-dom';
+import { BrowserRouter, Routes, Route, Link, Navigate, useLocation } from 'react-router-dom';
 import { AuthProvider, useAuth, TenancyProvider, useTenancy } from './contexts';
 import { NotificationProvider, useNotifications } from './notifications';
 import {
@@ -21,6 +21,7 @@ import {
   Download
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
+import { AppSelect } from './components/AppSelect';
 
 import ItemsPage from './pages/ItemsPage';
 import TransactionsPage from './pages/TransactionsPage';
@@ -48,20 +49,21 @@ type NavEntry = {
   label: string;
   to: string;
   mobilePrimary?: boolean;
-  requires?: 'truckInventory' | 'returns' | 'damages';
+  mobileAccent?: boolean;
+  requires?: 'inventory' | 'purchases' | 'sales' | 'truckInventory' | 'returns' | 'damages' | 'advancedReports';
 };
 
 const navEntries: NavEntry[] = [
   { icon: LayoutDashboard, label: 'Dashboard', to: '/', mobilePrimary: true },
-  { icon: Package, label: 'Inventory', to: '/items', mobilePrimary: true },
-  { icon: Plus, label: 'Purchases', to: '/purchases', mobilePrimary: true },
-  { icon: ShoppingCart, label: 'Sales', to: '/sales', mobilePrimary: true },
-  { icon: Users, label: 'Customers', to: '/customers' },
+  { icon: Package, label: 'Inventory', to: '/items', mobilePrimary: true, requires: 'inventory' },
+  { icon: ShoppingCart, label: 'Sales', to: '/sales', mobilePrimary: true, mobileAccent: true, requires: 'sales' },
+  { icon: Users, label: 'Customers', to: '/customers', mobilePrimary: true },
+  { icon: Plus, label: 'Purchases', to: '/purchases', requires: 'purchases' },
   { icon: History, label: 'Transactions', to: '/transactions' },
   { icon: Truck, label: 'Trucks', to: '/trucks', requires: 'truckInventory' },
   { icon: RotateCcw, label: 'Returns', to: '/returns', requires: 'returns' },
   { icon: AlertTriangle, label: 'Damages', to: '/damages', requires: 'damages' },
-  { icon: FileText, label: 'Reports', to: '/reports' },
+  { icon: FileText, label: 'Reports', to: '/reports', requires: 'advancedReports' },
   { icon: Settings, label: 'Settings', to: '/settings' },
 ];
 
@@ -122,15 +124,22 @@ function MobileFooterNav({
         {entries.map((entry) => {
           const Icon = entry.icon;
           const active = activePath === entry.to || activePath.startsWith(`${entry.to}/`);
+          const accent = entry.mobileAccent;
           return (
             <Link
               key={entry.to}
               to={entry.to}
-              className={`flex flex-col items-center justify-center gap-1 rounded-2xl px-2 py-2 text-[11px] font-medium transition-all ${
-                active ? 'bg-orange-500 text-white shadow-md shadow-orange-100' : 'text-zinc-600'
+              className={`flex flex-col items-center justify-center gap-1 px-2 py-2 text-[11px] font-medium transition-all ${
+                accent
+                  ? active
+                    ? '-translate-y-4 rounded-3xl bg-orange-500 text-white shadow-lg shadow-orange-200'
+                    : '-translate-y-4 rounded-3xl bg-white text-orange-600 shadow-md ring-1 ring-orange-200'
+                  : active
+                    ? 'rounded-2xl bg-orange-500 text-white shadow-md shadow-orange-100'
+                    : 'rounded-2xl text-zinc-600'
               }`}
             >
-              <Icon className="w-5 h-5" />
+              <Icon className={`${accent ? 'w-6 h-6' : 'w-5 h-5'}`} />
               <span>{entry.label}</span>
             </Link>
           );
@@ -155,6 +164,21 @@ function MobileFooterNav({
         </button>
       </div>
     </div>
+  );
+}
+
+function QuickSaleFab({ visible }: { visible: boolean }) {
+  if (!visible) return null;
+
+  return (
+    <Link
+      to="/sales/new"
+      className="md:hidden fixed bottom-24 right-4 z-40 flex h-14 w-14 items-center justify-center rounded-full bg-orange-500 text-white shadow-xl shadow-orange-200 transition-all hover:bg-orange-600"
+      aria-label="Create direct sale"
+      title="Create direct sale"
+    >
+      <ShoppingCart className="h-6 w-6" />
+    </Link>
   );
 }
 
@@ -312,6 +336,7 @@ function AppShell({ children }: { children: React.ReactNode }) {
 
   const mobilePrimaryEntries = availableNavEntries.filter((entry) => entry.mobilePrimary).slice(0, 4);
   const moreEntries = availableNavEntries.filter((entry) => !entry.mobilePrimary);
+  const showQuickSaleFab = Boolean(currentOrg?.settings?.modules?.sales) && !location.pathname.startsWith('/sales/new');
 
   React.useEffect(() => {
     const handleBeforeInstallPrompt = (event: Event) => {
@@ -389,16 +414,18 @@ function AppShell({ children }: { children: React.ReactNode }) {
               <img src={user?.photoURL || `https://ui-avatars.com/api/?name=${user?.displayName}`} className="w-8 h-8 rounded-full border border-zinc-200" alt="Avatar" referrerPolicy="no-referrer" />
               <div className="flex-1 min-w-0">
                 <p className="text-sm font-bold text-zinc-900 truncate">{user?.displayName}</p>
-                <select
+                <AppSelect
                   value={currentOrg?.id || ''}
-                  onChange={(e) => switchOrg(e.target.value)}
-                  className="text-xs text-zinc-500 bg-transparent border-none p-0 focus:ring-0 cursor-pointer hover:text-zinc-700 w-full truncate"
-                >
-                  {orgs.map(org => (
-                    <option key={org.id} value={org.id}>{org.name}</option>
-                  ))}
-                  {orgs.length === 0 && <option value="">No Org Selected</option>}
-                </select>
+                  onChange={switchOrg}
+                  options={
+                    orgs.length > 0
+                      ? orgs.map((org) => ({ value: org.id, label: org.name }))
+                      : [{ value: '', label: 'No Org Selected' }]
+                  }
+                  placeholder="Select workspace"
+                  buttonClassName="border-none bg-transparent px-0 py-0 text-xs text-zinc-500 shadow-none hover:text-zinc-700"
+                  panelClassName="rounded-2xl"
+                />
               </div>
             </div>
             <button
@@ -424,6 +451,7 @@ function AppShell({ children }: { children: React.ReactNode }) {
         onDismiss={() => setShowInstallPrompt(false)}
       />
 
+      <QuickSaleFab visible={showQuickSaleFab} />
       <MobileFooterNav entries={mobilePrimaryEntries} activePath={location.pathname} onMore={() => setIsMoreOpen(true)} />
       <MoreSheet
         open={isMoreOpen}
@@ -456,6 +484,7 @@ function MainContent() {
   const { error: notifyError } = useNotifications();
   const [orgName, setOrgName] = React.useState('');
   const [isCreating, setIsCreating] = React.useState(false);
+  const modules = currentOrg?.settings?.modules;
 
   if (loading) {
     return (
@@ -521,19 +550,19 @@ function MainContent() {
     <AppShell>
       <Routes>
         <Route path="/" element={<Dashboard />} />
-        <Route path="/items" element={<ItemsPage />} />
-        <Route path="/purchases" element={<PurchasesPage />} />
-        <Route path="/purchases/new" element={<CreatePurchasePage />} />
-        <Route path="/sales" element={<SalesPage />} />
-        <Route path="/sales/new" element={<CreateSalePage />} />
+        <Route path="/items" element={modules?.inventory ? <ItemsPage /> : <Navigate to="/" replace />} />
+        <Route path="/purchases" element={modules?.purchases ? <PurchasesPage /> : <Navigate to="/" replace />} />
+        <Route path="/purchases/new" element={modules?.purchases ? <CreatePurchasePage /> : <Navigate to="/" replace />} />
+        <Route path="/sales" element={modules?.sales ? <SalesPage /> : <Navigate to="/" replace />} />
+        <Route path="/sales/new" element={modules?.sales ? <CreateSalePage /> : <Navigate to="/" replace />} />
         <Route path="/sales/:id/invoice" element={<InvoicePage />} />
         <Route path="/customers" element={<CustomersPage />} />
         <Route path="/trucks" element={<TrucksPage />} />
         <Route path="/trucks/:id/stock" element={<TruckStockPage />} />
-        <Route path="/returns" element={<ReturnsPage />} />
-        <Route path="/damages" element={<DamagesPage />} />
+        <Route path="/returns" element={modules?.returns ? <ReturnsPage /> : <Navigate to="/" replace />} />
+        <Route path="/damages" element={modules?.damages ? <DamagesPage /> : <Navigate to="/" replace />} />
         <Route path="/transactions" element={<TransactionsPage />} />
-        <Route path="/reports" element={<ReportsPage />} />
+        <Route path="/reports" element={modules?.advancedReports ? <ReportsPage /> : <Navigate to="/" replace />} />
         <Route path="/settings" element={<SettingsPage />} />
         <Route path="*" element={<Dashboard />} />
       </Routes>

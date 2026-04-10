@@ -4,10 +4,11 @@ import { orgService } from '../services/orgService';
 import { OrganizationSettings, Role, ROLE_PERMISSIONS } from '../types';
 import { Shield, Layout, Save, Check, X, Search, Coins } from 'lucide-react';
 import { useNotifications } from '../notifications';
+import { AppSelect } from '../components/AppSelect';
 
 const CURRENCY_OPTIONS = [
-  { code: 'USD', label: 'US Dollar' },
-  { code: 'INR', label: 'Indian Rupee' },
+  { code: 'INR', label: 'Indian Rupee (₹)' },
+  { code: 'USD', label: 'US Dollar ($)' },
   { code: 'AED', label: 'UAE Dirham' },
   { code: 'SAR', label: 'Saudi Riyal' },
   { code: 'EUR', label: 'Euro' },
@@ -25,7 +26,11 @@ export default function SettingsPage() {
 
   useEffect(() => {
     if (currentOrg) {
-      setSettings(currentOrg.settings);
+      setSettings({
+        multiLocationEnabled: false,
+        tableDisplayMode: 'table',
+        ...currentOrg.settings,
+      });
     }
   }, [currentOrg]);
 
@@ -115,32 +120,49 @@ export default function SettingsPage() {
         <div className="md:col-span-2 bg-white border border-zinc-200 rounded-2xl p-6 shadow-sm space-y-5">
           <div>
             <label className="block text-xs font-bold uppercase tracking-wider text-zinc-400 mb-2">Default Currency</label>
-            <select
+            <AppSelect
               value={settings.currency}
-              onChange={(e) => setSettings({ ...settings, currency: e.target.value })}
-              className="w-full px-4 py-3 bg-zinc-50 border border-zinc-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-orange-500"
-            >
-              {CURRENCY_OPTIONS.map((currency) => (
-                <option key={currency.code} value={currency.code}>
-                  {currency.code} - {currency.label}
-                </option>
-              ))}
-            </select>
+              onChange={(value) => setSettings({ ...settings, currency: value })}
+              placeholder="Select Currency"
+              searchable
+              options={CURRENCY_OPTIONS.map((currency) => ({
+                value: currency.code,
+                label: `${currency.code} - ${currency.label}`,
+                keywords: currency.label,
+              }))}
+              buttonClassName="py-3"
+            />
             <p className="mt-2 text-xs text-zinc-500">This becomes the default currency shown throughout the app.</p>
           </div>
 
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-            <label className="flex items-center justify-between rounded-2xl border border-zinc-200 p-4 cursor-pointer">
+            <button
+              type="button"
+              onClick={() => setSettings({ ...settings, taxEnabled: !settings.taxEnabled })}
+              className="flex items-center justify-between rounded-2xl border border-zinc-200 p-4 text-left cursor-pointer"
+            >
               <div>
                 <p className="text-sm font-bold text-zinc-900">Enable Tax</p>
                 <p className="text-xs text-zinc-500">Use organization-wide tax in sales.</p>
               </div>
-              <input
-                type="checkbox"
-                checked={settings.taxEnabled}
-                onChange={(e) => setSettings({ ...settings, taxEnabled: e.target.checked })}
-              />
-            </label>
+              <div className={`w-10 h-6 rounded-full p-1 transition-colors ${settings.taxEnabled ? 'bg-orange-500' : 'bg-zinc-300'}`}>
+                <div className={`w-4 h-4 bg-white rounded-full transition-transform ${settings.taxEnabled ? 'translate-x-4' : 'translate-x-0'}`} />
+              </div>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setSettings({ ...settings, multiLocationEnabled: !settings.multiLocationEnabled })}
+              className="flex items-center justify-between rounded-2xl border border-zinc-200 p-4 text-left cursor-pointer"
+            >
+              <div>
+                <p className="text-sm font-bold text-zinc-900">Multiple Locations</p>
+                <p className="text-xs text-zinc-500">Show warehouse and destination selectors across inventory flows.</p>
+              </div>
+              <div className={`w-10 h-6 rounded-full p-1 transition-colors ${settings.multiLocationEnabled ? 'bg-orange-500' : 'bg-zinc-300'}`}>
+                <div className={`w-4 h-4 bg-white rounded-full transition-transform ${settings.multiLocationEnabled ? 'translate-x-4' : 'translate-x-0'}`} />
+              </div>
+            </button>
 
             <div className="rounded-2xl border border-zinc-200 p-4">
               <label className="block text-sm font-bold text-zinc-900 mb-2">Tax Rate (%)</label>
@@ -150,8 +172,39 @@ export default function SettingsPage() {
                 step="0.01"
                 value={settings.taxRate}
                 onChange={(e) => setSettings({ ...settings, taxRate: Number(e.target.value) })}
+                disabled={!settings.taxEnabled}
                 className="w-full px-4 py-2 bg-zinc-50 border border-zinc-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-orange-500"
               />
+              <p className="mt-2 text-xs text-zinc-500">{settings.taxEnabled ? 'Applied to sales calculations.' : 'Enable tax to edit this rate.'}</p>
+            </div>
+
+            <div className="rounded-2xl border border-zinc-200 p-4">
+              <p className="text-sm font-bold text-zinc-900 mb-2">Data Layout</p>
+              <div className="flex gap-2 rounded-xl bg-zinc-100 p-1">
+                <button
+                  type="button"
+                  onClick={() => setSettings({ ...settings, tableDisplayMode: 'table' })}
+                  className={`flex-1 rounded-lg px-3 py-2 text-sm font-medium transition-all ${
+                    settings.tableDisplayMode === 'table'
+                      ? 'bg-white text-zinc-900 shadow-sm'
+                      : 'text-zinc-500'
+                  }`}
+                >
+                  Table
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setSettings({ ...settings, tableDisplayMode: 'cards' })}
+                  className={`flex-1 rounded-lg px-3 py-2 text-sm font-medium transition-all ${
+                    settings.tableDisplayMode === 'cards'
+                      ? 'bg-white text-zinc-900 shadow-sm'
+                      : 'text-zinc-500'
+                  }`}
+                >
+                  Cards
+                </button>
+              </div>
+              <p className="mt-2 text-xs text-zinc-500">Choose whether data-heavy screens open as wide tables or stacked cards by default.</p>
             </div>
           </div>
         </div>

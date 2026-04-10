@@ -7,6 +7,9 @@ import { Truck, Item, InventoryLocation, StockSummary } from '../types';
 import { ArrowLeft, Package, ArrowUpRight, ArrowDownLeft, Search, Plus, Minus, Check } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { useNotifications } from '../notifications';
+import { AppSelect } from '../components/AppSelect';
+import { TableDisplayToggle } from '../components/TableDisplayToggle';
+import { useOrgTableDisplayMode } from '../hooks/useOrgTableDisplayMode';
 
 export default function TruckStockPage() {
   const { id } = useParams<{ id: string }>();
@@ -30,6 +33,7 @@ export default function TruckStockPage() {
   const [sourceLocationId, setSourceLocationId] = useState('');
   const [destLocationId, setDestLocationId] = useState('');
   const [submitting, setSubmitting] = useState(false);
+  const { tableDisplayMode, setTableDisplayMode, savingTableDisplayMode } = useOrgTableDisplayMode();
 
   useEffect(() => {
     if (currentOrg && id) {
@@ -157,7 +161,16 @@ export default function TruckStockPage() {
         </div>
       </header>
 
+      <div className="flex justify-end">
+        <TableDisplayToggle
+          value={tableDisplayMode}
+          onChange={setTableDisplayMode}
+          disabled={savingTableDisplayMode}
+        />
+      </div>
+
       <div className="bg-white rounded-2xl border border-zinc-200 shadow-sm overflow-hidden">
+        {tableDisplayMode === 'table' ? (
         <div className="overflow-x-auto">
           <table className="w-full text-left border-collapse">
             <thead>
@@ -199,6 +212,34 @@ export default function TruckStockPage() {
             </tbody>
           </table>
         </div>
+        ) : (
+          <div className="divide-y divide-zinc-100">
+            {stock.filter(s => s.quantity > 0).length === 0 ? (
+              <div className="px-6 py-12 text-center text-zinc-500">
+                <Package className="w-12 h-12 text-zinc-200 mx-auto mb-4" />
+                <p>This truck is currently empty.</p>
+              </div>
+            ) : (
+              stock.filter(s => s.quantity > 0).map((s) => {
+                const item = items.find(i => i.id === s.itemId);
+                return (
+                  <div key={s.itemId} className="p-4 sm:p-5">
+                    <div className="flex items-start justify-between gap-3">
+                      <div>
+                        <p className="text-sm font-bold text-zinc-900">{item?.name || 'Unknown Item'}</p>
+                        <p className="text-xs font-mono uppercase tracking-wider text-zinc-400">{item?.sku || '-'}</p>
+                      </div>
+                      <div className="text-right">
+                        <p className="text-lg font-bold text-zinc-900">{s.quantity}</p>
+                        <p className="text-xs text-zinc-500">{item?.unit}</p>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })
+            )}
+          </div>
+        )}
       </div>
 
       {/* Load/Unload Modal */}
@@ -278,15 +319,14 @@ export default function TruckStockPage() {
                       <label className="text-xs font-bold text-zinc-500 uppercase">
                         {isLoadModalOpen ? 'Source Warehouse' : 'Destination Warehouse'}
                       </label>
-                      <select
+                      <AppSelect
                         value={isLoadModalOpen ? sourceLocationId : destLocationId}
-                        onChange={(e) => isLoadModalOpen ? setSourceLocationId(e.target.value) : setDestLocationId(e.target.value)}
-                        className="w-full px-4 py-2 bg-zinc-50 border border-zinc-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-orange-500"
-                      >
-                        {locations.filter(l => l.type !== 'truck').map(loc => (
-                          <option key={loc.id} value={loc.id}>{loc.name}</option>
-                        ))}
-                      </select>
+                        onChange={(value) => isLoadModalOpen ? setSourceLocationId(value) : setDestLocationId(value)}
+                        placeholder={isLoadModalOpen ? 'Select Source Warehouse' : 'Select Destination Warehouse'}
+                        options={locations
+                          .filter((location) => location.type !== 'truck')
+                          .map((location) => ({ value: location.id, label: location.name }))}
+                      />
                     </div>
 
                     <div className="space-y-2">

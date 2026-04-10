@@ -2,10 +2,16 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useAuth, useTenancy } from '../contexts';
 import { inventoryService } from '../services/inventoryService';
-import { Item, ItemCategory, InventoryLocation } from '../types';
-import { Plus, Search, Filter, Package, Tag, X, Loader2, Pencil, ArrowUpDown, Warehouse } from 'lucide-react';
+import { purchaseService } from '../services/purchaseService';
+import { Item, ItemCategory, InventoryLocation, Purchase, Supplier } from '../types';
+import { Plus, Search, Filter, Package, Tag, X, Loader2, Pencil, ArrowUpDown, Warehouse, Banknote, AlertTriangle, TrendingUp, Clock3 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { useNotifications } from '../notifications';
+import { AppSelect } from '../components/AppSelect';
+import { formatCurrency } from '../utils/currency';
+import { format } from 'date-fns';
+import { TableDisplayToggle } from '../components/TableDisplayToggle';
+import { useOrgTableDisplayMode } from '../hooks/useOrgTableDisplayMode';
 
 const emptyItemForm = {
   name: '',
@@ -25,6 +31,8 @@ export default function ItemsPage() {
   const [items, setItems] = useState<Item[]>([]);
   const [categories, setCategories] = useState<ItemCategory[]>([]);
   const [locations, setLocations] = useState<InventoryLocation[]>([]);
+  const [purchases, setPurchases] = useState<Purchase[]>([]);
+  const [suppliers, setSuppliers] = useState<Supplier[]>([]);
   const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
 
@@ -41,6 +49,7 @@ export default function ItemsPage() {
   const [stockLocationId, setStockLocationId] = useState('');
   const [stockQuantity, setStockQuantity] = useState(1);
   const [stockNotes, setStockNotes] = useState('');
+  const { tableDisplayMode, setTableDisplayMode, savingTableDisplayMode } = useOrgTableDisplayMode();
 
   useEffect(() => {
     if (currentOrg) {
@@ -52,14 +61,18 @@ export default function ItemsPage() {
     if (!currentOrg) return;
     setLoading(true);
     try {
-      const [itemsData, catsData, locsData] = await Promise.all([
+      const [itemsData, catsData, locsData, purchasesData, suppliersData] = await Promise.all([
         inventoryService.getItems(currentOrg.id),
         inventoryService.getCategories(currentOrg.id),
         inventoryService.getLocations(currentOrg.id),
+        purchaseService.getPurchases(currentOrg.id),
+        purchaseService.getSuppliers(currentOrg.id),
       ]);
       setItems(itemsData);
       setCategories(catsData);
       setLocations(locsData);
+      setPurchases(purchasesData);
+      setSuppliers(suppliersData);
       setItemForm(prev => ({
         ...prev,
         categoryId: prev.categoryId || catsData[0]?.id || '',
@@ -188,14 +201,63 @@ export default function ItemsPage() {
     categories.find(category => category.id === item.categoryId)?.name.toLowerCase().includes(searchTerm.toLowerCase())
   );
 
+  const inventoryMetrics = useMemo(() => {
+    const currency = currentOrg?.settings.currency;
+    const totalUnits = items.reduce((sum, item) => sum + item.currentStock, 0);
+    const totalStockValue = items.reduce((sum, item) => sum + (item.currentStock * item.basePrice), 0);
+    const totalRetailValue = items.reduce((sum, item) => sum + (item.currentStock * item.sellingPrice), 0);
+    const expectedMarginValue = totalRetailValue - totalStockValue;
+    const lowStockCount = items.filter((item) => item.currentStock <= item.reorderThreshold && item.isActive).length;
+    const inactiveCount = items.filter((item) => !item.isActive).length;
+    const outstandingPurchases = purchases.filter((purchase) => purchase.totalAmount > purchase.paidAmount);
+    const outstandingPayables = suppliers.reduce((sum, supplier) => sum + (supplier.balance || 0), 0);
+    const oldestOutstandingPurchase = outstandingPurchases.reduce<Purchase | null>((oldest, purchase) => {
+      if (!oldest) return purchase;
+      return purchase.timestamp < oldest.timestamp ? purchase : oldest;
+    }, null);
+
+    return [
+      {
+        label: 'Stock Value',
+        value: formatCurrency(totalStockValue, currency),
+        note: `${totalUnits.toLocaleString()} units across all items`,
+        icon: Banknote,
+        tone: 'text-emerald-700 bg-emerald-50',
+      },
+      {
+        label: 'Retail Value',
+        value: formatCurrency(totalRetailValue, currency),
+        note: `Projected margin ${formatCurrency(expectedMarginValue, currency)}`,
+        icon: TrendingUp,
+        tone: 'text-blue-700 bg-blue-50',
+      },
+      {
+        label: 'Supplier Credit',
+        value: formatCurrency(outstandingPayables, currency),
+        note: oldestOutstandingPurchase
+          ? `Oldest unpaid purchase: ${format(oldestOutstandingPurchase.timestamp, 'dd MMM yyyy')}`
+          : 'No unpaid purchases right now',
+        icon: Clock3,
+        tone: 'text-orange-700 bg-orange-50',
+      },
+      {
+        label: 'Stock Alerts',
+        value: `${lowStockCount} low / ${inactiveCount} inactive`,
+        note: `${items.length} total products in inventory`,
+        icon: AlertTriangle,
+        tone: 'text-rose-700 bg-rose-50',
+      },
+    ];
+  }, [currentOrg?.settings.currency, items, purchases, suppliers]);
+
   if (loading) return <div className="p-8 text-center">Loading items...</div>;
 
   return (
     <div className="space-y-6">
       <header className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
         <div>
-          <h2 className="text-2xl font-bold text-zinc-900">Item Master</h2>
-          <p className="text-sm text-zinc-500">Manage your product catalog, prices, and stock levels.</p>
+          <h2 className="text-2xl font-bold text-zinc-900">Inventory</h2>
+          <p className="text-sm text-zinc-500">Manage your product catalog, stock value, and replenishment risks.</p>
         </div>
         <div className="flex flex-col gap-3 sm:flex-row">
           <Link
@@ -215,7 +277,34 @@ export default function ItemsPage() {
         </div>
       </header>
 
-      <div className="flex flex-col sm:flex-row gap-4">
+      <div className="rounded-2xl border border-zinc-200 bg-white p-4 shadow-sm sm:p-5">
+        <div className="mb-4">
+          <h3 className="text-sm font-bold text-zinc-900">Inventory Overview</h3>
+          <p className="text-xs text-zinc-500">Compact snapshot of value, credit, and stock health.</p>
+        </div>
+
+        <div className="grid grid-cols-2 gap-3">
+          {inventoryMetrics.map((metric) => {
+            const Icon = metric.icon;
+            return (
+              <div key={metric.label} className="rounded-2xl border border-zinc-100 bg-zinc-50 p-4">
+                <div className="mb-3 flex items-start justify-between gap-2">
+                  <div>
+                    <p className="mb-1 text-[10px] font-mono uppercase tracking-wider text-zinc-400">{metric.label}</p>
+                    <p className="text-lg font-bold text-zinc-900 sm:text-xl">{metric.value}</p>
+                  </div>
+                  <div className={`flex h-10 w-10 items-center justify-center rounded-xl ${metric.tone}`}>
+                    <Icon className="h-4 w-4" />
+                  </div>
+                </div>
+                <p className="text-xs text-zinc-500">{metric.note}</p>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+
+      <div className="flex flex-col gap-4 lg:flex-row lg:items-center">
         <div className="relative flex-1">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-zinc-400" />
           <input
@@ -230,9 +319,15 @@ export default function ItemsPage() {
           <Filter className="w-4 h-4" />
           {filteredItems.length} items
         </div>
+        <TableDisplayToggle
+          value={tableDisplayMode}
+          onChange={setTableDisplayMode}
+          disabled={savingTableDisplayMode}
+        />
       </div>
 
       <div className="bg-white border border-zinc-200 rounded-2xl overflow-hidden shadow-sm">
+        {tableDisplayMode === 'table' ? (
         <div className="overflow-x-auto">
           <table className="w-full text-left border-collapse">
             <thead>
@@ -275,10 +370,10 @@ export default function ItemsPage() {
                     </td>
                     <td className="px-6 py-4 text-right">
                       <p className="text-sm font-bold text-zinc-900">
-                        {currentOrg?.settings.currency} {item.sellingPrice.toFixed(2)}
+                        {formatCurrency(item.sellingPrice, currentOrg?.settings.currency)}
                       </p>
                       <p className="text-xs text-zinc-500">
-                        Cost {currentOrg?.settings.currency} {item.basePrice.toFixed(2)}
+                        Cost {formatCurrency(item.basePrice, currentOrg?.settings.currency)}
                       </p>
                     </td>
                     <td className="px-6 py-4 text-right">
@@ -323,21 +418,98 @@ export default function ItemsPage() {
             </tbody>
           </table>
         </div>
+        ) : (
+          <div className="divide-y divide-zinc-100">
+            {filteredItems.length === 0 ? (
+              <div className="px-6 py-12 text-center text-zinc-500">
+                No items found. Add your first product to get started.
+              </div>
+            ) : (
+              filteredItems.map((item) => (
+                <div key={item.id} className="p-4 sm:p-5">
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="flex items-center gap-3">
+                      <div className="w-10 h-10 rounded-xl bg-zinc-100 flex items-center justify-center">
+                        <Package className="w-5 h-5 text-zinc-400" />
+                      </div>
+                      <div>
+                        <p className="text-sm font-bold text-zinc-900">{item.name}</p>
+                        <p className="text-xs font-mono text-zinc-500">{item.sku || 'NO-SKU'}</p>
+                      </div>
+                    </div>
+                    <span className={`inline-flex px-2 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider ${item.isActive ? 'bg-green-100 text-green-700' : 'bg-zinc-100 text-zinc-500'}`}>
+                      {item.isActive ? 'Active' : 'Inactive'}
+                    </span>
+                  </div>
+
+                  <div className="mt-4 grid grid-cols-2 gap-3 rounded-2xl bg-zinc-50 p-3">
+                    <div className="col-span-2">
+                      <p className="text-[10px] font-mono uppercase tracking-wider text-zinc-400">Category</p>
+                      <p className="mt-1 text-sm text-zinc-700">{categories.find(c => c.id === item.categoryId)?.name || 'Uncategorized'}</p>
+                    </div>
+                    <div>
+                      <p className="text-[10px] font-mono uppercase tracking-wider text-zinc-400">Selling Price</p>
+                      <p className="mt-1 text-sm font-bold text-zinc-900">{formatCurrency(item.sellingPrice, currentOrg?.settings.currency)}</p>
+                    </div>
+                    <div>
+                      <p className="text-[10px] font-mono uppercase tracking-wider text-zinc-400">Cost</p>
+                      <p className="mt-1 text-sm text-zinc-700">{formatCurrency(item.basePrice, currentOrg?.settings.currency)}</p>
+                    </div>
+                    <div>
+                      <p className="text-[10px] font-mono uppercase tracking-wider text-zinc-400">Stock</p>
+                      <p className={`mt-1 text-sm font-bold ${item.currentStock <= item.reorderThreshold ? 'text-red-600' : 'text-zinc-900'}`}>
+                        {item.currentStock} {item.unit}
+                      </p>
+                    </div>
+                    <div>
+                      <p className="text-[10px] font-mono uppercase tracking-wider text-zinc-400">Reorder Level</p>
+                      <p className="mt-1 text-sm text-zinc-700">{item.reorderThreshold}</p>
+                    </div>
+                  </div>
+
+                  {item.description && <p className="mt-3 text-sm text-zinc-500">{item.description}</p>}
+
+                  <div className="mt-4 flex flex-wrap justify-end gap-2">
+                    <button
+                      onClick={() => openStockModal(item, 'add')}
+                      className="px-3 py-2 text-xs font-medium bg-green-50 text-green-700 rounded-xl hover:bg-green-100 transition-colors"
+                    >
+                      Add Stock
+                    </button>
+                    <button
+                      onClick={() => openStockModal(item, 'remove')}
+                      className="px-3 py-2 text-xs font-medium bg-red-50 text-red-700 rounded-xl hover:bg-red-100 transition-colors"
+                    >
+                      Remove
+                    </button>
+                    <button
+                      onClick={() => openEditModal(item)}
+                      className="inline-flex items-center gap-2 rounded-xl border border-zinc-200 px-3 py-2 text-xs font-medium text-zinc-700 hover:bg-zinc-50 transition-colors"
+                    >
+                      <Pencil className="w-4 h-4" />
+                      Edit
+                    </button>
+                  </div>
+                </div>
+              ))
+            )}
+          </div>
+        )}
       </div>
 
       <AnimatePresence>
         {isItemModalOpen && (
           <ModalShell onClose={() => setIsItemModalOpen(false)}>
-            <div className="p-6 border-b border-zinc-100 flex items-center justify-between">
+            <div className="flex items-center justify-between border-b border-zinc-100 p-4 sm:p-6">
               <h3 className="text-xl font-bold text-zinc-900">{editingItem ? 'Edit Item' : 'Add New Item'}</h3>
               <button onClick={() => setIsItemModalOpen(false)} className="p-2 hover:bg-zinc-100 rounded-full transition-colors">
                 <X className="w-5 h-5 text-zinc-400" />
               </button>
             </div>
 
-            <form onSubmit={handleSaveItem} className="p-6 space-y-4">
-              <div className="grid grid-cols-2 gap-4">
-                <div className="col-span-2">
+            <form onSubmit={handleSaveItem} className="space-y-4 p-4 sm:p-6">
+              <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                <div className="sm:col-span-2 min-w-0">
                   <label className="block text-xs font-bold text-zinc-400 uppercase mb-1">Item Name</label>
                   <input
                     required
@@ -348,7 +520,7 @@ export default function ItemsPage() {
                     placeholder="e.g. Premium Dates 1kg"
                   />
                 </div>
-                <div>
+                <div className="min-w-0">
                   <label className="block text-xs font-bold text-zinc-400 uppercase mb-1">SKU</label>
                   <input
                     type="text"
@@ -358,44 +530,44 @@ export default function ItemsPage() {
                     placeholder="Optional"
                   />
                 </div>
-                <div>
+                <div className="min-w-0">
                   <label className="block text-xs font-bold text-zinc-400 uppercase mb-1">Category</label>
                   {showCategoryInput ? (
-                    <div className="flex gap-2">
+                    <div className="flex min-w-0 flex-col gap-2 sm:flex-row">
                       <input
                         type="text"
                         value={newCategoryName}
                         onChange={(e) => setNewCategoryName(e.target.value)}
-                        className="flex-1 px-4 py-2 bg-zinc-50 border border-zinc-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-orange-500"
+                        className="min-w-0 flex-1 px-4 py-2 bg-zinc-50 border border-zinc-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-orange-500"
                         placeholder="New category..."
                       />
-                      <button type="button" onClick={handleCreateCategory} className="px-3 bg-zinc-900 text-white rounded-xl text-xs font-bold">
+                      <button type="button" onClick={handleCreateCategory} className="px-3 py-2 bg-zinc-900 text-white rounded-xl text-xs font-bold">
                         Add
                       </button>
-                      <button type="button" onClick={() => setShowCategoryInput(false)} className="px-3 bg-zinc-100 text-zinc-500 rounded-xl text-xs font-bold">
+                      <button type="button" onClick={() => setShowCategoryInput(false)} className="px-3 py-2 bg-zinc-100 text-zinc-500 rounded-xl text-xs font-bold">
                         Cancel
                       </button>
                     </div>
                   ) : (
-                    <div className="flex gap-2">
-                      <select
-                        required
-                        value={itemForm.categoryId}
-                        onChange={(e) => setItemForm({ ...itemForm, categoryId: e.target.value })}
-                        className="flex-1 px-4 py-2 bg-zinc-50 border border-zinc-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-orange-500"
-                      >
-                        <option value="">Select Category</option>
-                        {categories.map(cat => (
-                          <option key={cat.id} value={cat.id}>{cat.name}</option>
-                        ))}
-                      </select>
-                      <button type="button" onClick={() => setShowCategoryInput(true)} className="p-2 bg-zinc-100 text-zinc-600 rounded-xl hover:bg-zinc-200 transition-colors">
+                    <div className="flex min-w-0 gap-2">
+                      <div className="min-w-0 flex-1">
+                        <AppSelect
+                          value={itemForm.categoryId || ''}
+                          onChange={(value) => setItemForm({ ...itemForm, categoryId: value })}
+                          placeholder="Select Category"
+                          options={[
+                            { value: '', label: 'Select Category' },
+                            ...categories.map((cat) => ({ value: cat.id, label: cat.name })),
+                          ]}
+                        />
+                      </div>
+                      <button type="button" onClick={() => setShowCategoryInput(true)} className="shrink-0 p-2 bg-zinc-100 text-zinc-600 rounded-xl hover:bg-zinc-200 transition-colors">
                         <Plus className="w-5 h-5" />
                       </button>
                     </div>
                   )}
                 </div>
-                <div>
+                <div className="min-w-0">
                   <label className="block text-xs font-bold text-zinc-400 uppercase mb-1">Unit</label>
                   <input
                     required
@@ -405,7 +577,7 @@ export default function ItemsPage() {
                     className="w-full px-4 py-2 bg-zinc-50 border border-zinc-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-orange-500"
                   />
                 </div>
-                <div>
+                <div className="min-w-0">
                   <label className="block text-xs font-bold text-zinc-400 uppercase mb-1">Reorder Level</label>
                   <input
                     required
@@ -416,7 +588,7 @@ export default function ItemsPage() {
                     className="w-full px-4 py-2 bg-zinc-50 border border-zinc-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-orange-500 font-mono"
                   />
                 </div>
-                <div>
+                <div className="min-w-0">
                   <label className="block text-xs font-bold text-zinc-400 uppercase mb-1">Base Cost</label>
                   <input
                     required
@@ -428,7 +600,7 @@ export default function ItemsPage() {
                     className="w-full px-4 py-2 bg-zinc-50 border border-zinc-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-orange-500 font-mono"
                   />
                 </div>
-                <div>
+                <div className="min-w-0">
                   <label className="block text-xs font-bold text-zinc-400 uppercase mb-1">Selling Price</label>
                   <input
                     required
@@ -440,7 +612,7 @@ export default function ItemsPage() {
                     className="w-full px-4 py-2 bg-zinc-50 border border-zinc-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-orange-500 font-mono"
                   />
                 </div>
-                <div className="col-span-2">
+                <div className="min-w-0 sm:col-span-2">
                   <label className="block text-xs font-bold text-zinc-400 uppercase mb-1">Description</label>
                   <textarea
                     value={itemForm.description}
@@ -450,7 +622,7 @@ export default function ItemsPage() {
                   />
                 </div>
                 {editingItem && (
-                  <div className="col-span-2 flex items-center justify-between p-4 rounded-xl bg-zinc-50 border border-zinc-200">
+                  <div className="flex flex-col gap-3 rounded-xl border border-zinc-200 bg-zinc-50 p-4 sm:col-span-2 sm:flex-row sm:items-center sm:justify-between">
                     <div>
                       <p className="text-sm font-bold text-zinc-900">Item Availability</p>
                       <p className="text-xs text-zinc-500">Inactive items stay in reports but are hidden from future operations.</p>
@@ -502,19 +674,18 @@ export default function ItemsPage() {
                 </div>
                 <div>
                   <label className="block text-xs font-bold text-zinc-400 uppercase mb-1">Location</label>
-                  <select
+                  <AppSelect
                     value={stockLocationId}
-                    onChange={(e) => setStockLocationId(e.target.value)}
-                    className="w-full px-4 py-2 bg-zinc-50 border border-zinc-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-orange-500"
-                    required
-                  >
-                    <option value="">Select Location</option>
-                    {locations.map(location => (
-                      <option key={location.id} value={location.id}>
-                        {location.name} ({location.type})
-                      </option>
-                    ))}
-                  </select>
+                    onChange={setStockLocationId}
+                    placeholder="Select Location"
+                    options={[
+                      { value: '', label: 'Select Location' },
+                      ...locations.map((location) => ({
+                        value: location.id,
+                        label: `${location.name} (${location.type})`,
+                      })),
+                    ]}
+                  />
                 </div>
                 <div>
                   <label className="block text-xs font-bold text-zinc-400 uppercase mb-1">Quantity</label>
@@ -555,7 +726,7 @@ export default function ItemsPage() {
 
 function ModalShell({ children, onClose }: { children: React.ReactNode; onClose: () => void }) {
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4">
       <motion.div
         initial={{ opacity: 0 }}
         animate={{ opacity: 1 }}
@@ -567,7 +738,7 @@ function ModalShell({ children, onClose }: { children: React.ReactNode; onClose:
         initial={{ opacity: 0, scale: 0.95, y: 20 }}
         animate={{ opacity: 1, scale: 1, y: 0 }}
         exit={{ opacity: 0, scale: 0.95, y: 20 }}
-        className="relative w-full max-w-2xl bg-white rounded-3xl shadow-2xl overflow-hidden"
+        className="relative max-h-[calc(100vh-1.5rem)] w-full max-w-2xl overflow-y-auto rounded-[2rem] bg-white shadow-2xl sm:max-h-[calc(100vh-2rem)]"
       >
         {children}
       </motion.div>

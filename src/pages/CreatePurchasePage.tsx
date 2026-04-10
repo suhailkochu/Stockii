@@ -4,10 +4,11 @@ import { useTenancy } from '../contexts';
 import { useAuth } from '../contexts';
 import { purchaseService } from '../services/purchaseService';
 import { inventoryService } from '../services/inventoryService';
-import { Supplier, Item, PurchaseLine, InventoryLocation } from '../types';
+import { Supplier, Item, PurchaseLine, InventoryLocation, ItemCategory } from '../types';
 import { Plus, Trash2, Search, Loader2, MapPin, Truck, PackagePlus, Building2, X } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { useNotifications } from '../notifications';
+import { AppSelect } from '../components/AppSelect';
 
 type SupplierFormState = Partial<Supplier>;
 type LocationFormState = {
@@ -31,12 +32,24 @@ const emptyLocationForm: LocationFormState = {
   isDefault: false,
 };
 
+const emptyItemForm: Partial<Item> = {
+  name: '',
+  sku: '',
+  categoryId: '',
+  unit: 'pcs',
+  basePrice: 0,
+  sellingPrice: 0,
+  reorderThreshold: 5,
+  description: '',
+};
+
 export const CreatePurchasePage: React.FC = () => {
   const { currentOrg } = useTenancy();
   const { user } = useAuth();
   const { success, error: notifyError } = useNotifications();
   const [suppliers, setSuppliers] = useState<Supplier[]>([]);
   const [items, setItems] = useState<Item[]>([]);
+  const [categories, setCategories] = useState<ItemCategory[]>([]);
   const [locations, setLocations] = useState<InventoryLocation[]>([]);
   const [selectedSupplier, setSelectedSupplier] = useState('');
   const [selectedLocation, setSelectedLocation] = useState('');
@@ -49,9 +62,12 @@ export const CreatePurchasePage: React.FC = () => {
 
   const [showSupplierModal, setShowSupplierModal] = useState(false);
   const [showLocationModal, setShowLocationModal] = useState(false);
+  const [showItemModal, setShowItemModal] = useState(false);
   const [supplierForm, setSupplierForm] = useState<SupplierFormState>(emptySupplierForm);
   const [locationForm, setLocationForm] = useState<LocationFormState>(emptyLocationForm);
+  const [itemForm, setItemForm] = useState<Partial<Item>>(emptyItemForm);
   const [setupSubmitting, setSetupSubmitting] = useState(false);
+  const multiLocationEnabled = currentOrg?.settings?.multiLocationEnabled ?? false;
 
   useEffect(() => {
     if (currentOrg) {
@@ -61,14 +77,20 @@ export const CreatePurchasePage: React.FC = () => {
 
   const loadReferenceData = async () => {
     if (!currentOrg) return;
-    const [supplierData, itemData, locationData] = await Promise.all([
+    const [supplierData, itemData, locationData, categoryData] = await Promise.all([
       purchaseService.getSuppliers(currentOrg.id),
       inventoryService.getItems(currentOrg.id),
       inventoryService.getLocations(currentOrg.id),
+      inventoryService.getCategories(currentOrg.id),
     ]);
     setSuppliers(supplierData);
     setItems(itemData);
     setLocations(locationData);
+    setCategories(categoryData);
+    setItemForm(prev => ({
+      ...prev,
+      categoryId: prev.categoryId || categoryData[0]?.id || '',
+    }));
 
     if (!selectedLocation) {
       const def = locationData.find(location => location.isDefault || location.type === 'warehouse');
@@ -77,6 +99,10 @@ export const CreatePurchasePage: React.FC = () => {
   };
 
   const totalAmount = purchaseItems.reduce((sum, item) => sum + (item.subtotal || 0), 0);
+  const normalizedPaidAmount = paymentType === 'cash'
+    ? totalAmount
+    : Math.min(Math.max(paidAmount, 0), totalAmount);
+  const outstandingAmount = Math.max(totalAmount - normalizedPaidAmount, 0);
 
   const addItem = (item: Item) => {
     const existing = purchaseItems.find(pi => pi.itemId === item.id);
@@ -105,6 +131,14 @@ export const CreatePurchasePage: React.FC = () => {
     setPurchaseItems(purchaseItems.filter((_, i) => i !== index));
   };
 
+  const openItemModal = () => {
+    setItemForm({
+      ...emptyItemForm,
+      categoryId: categories[0]?.id || '',
+    });
+    setShowItemModal(true);
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!currentOrg || !user || !selectedSupplier || !selectedLocation || purchaseItems.length === 0) return;
@@ -117,8 +151,8 @@ export const CreatePurchasePage: React.FC = () => {
         locationId: selectedLocation,
         items: purchaseItems as PurchaseLine[],
         totalAmount,
-        paidAmount: paymentType === 'cash' ? totalAmount : paidAmount,
-        paymentType,
+        paidAmount: normalizedPaidAmount,
+        paymentType: outstandingAmount > 0 ? 'credit' : 'cash',
         status: 'completed',
         userId: user.uid,
         notes
@@ -128,6 +162,7 @@ export const CreatePurchasePage: React.FC = () => {
       setSelectedSupplier('');
       setNotes('');
       setPaidAmount(0);
+      setPaymentType('cash');
     } catch (error: any) {
       console.error(error);
       notifyError(error.message || 'Failed to record purchase');
@@ -174,6 +209,28 @@ export const CreatePurchasePage: React.FC = () => {
     }
   };
 
+  const handleCreateItem = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!currentOrg) return;
+    setSetupSubmitting(true);
+    try {
+      const newItem = await inventoryService.createItem(currentOrg.id, itemForm);
+      setItems(prev => [...prev, newItem as Item].sort((a, b) => a.name.localeCompare(b.name)));
+      addItem(newItem as Item);
+      setShowItemModal(false);
+      setItemForm({
+        ...emptyItemForm,
+        categoryId: categories[0]?.id || '',
+      });
+      success('Item added successfully');
+    } catch (error: any) {
+      console.error(error);
+      notifyError(error.message || 'Failed to add item');
+    } finally {
+      setSetupSubmitting(false);
+    }
+  };
+
   const filteredItems = items.filter(item =>
     item.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
     item.sku?.toLowerCase().includes(searchTerm.toLowerCase())
@@ -208,47 +265,66 @@ export const CreatePurchasePage: React.FC = () => {
                 + Add Supplier
               </button>
             </div>
-            <select
+            <AppSelect
               value={selectedSupplier}
-              onChange={(e) => setSelectedSupplier(e.target.value)}
-              className="w-full p-2 border rounded-lg focus:ring-2 focus:ring-blue-500 outline-none"
-              required
-            >
-              <option value="">Select Supplier</option>
-              {suppliers.map(s => (
-                <option key={s.id} value={s.id}>{s.name} (Bal: {s.balance})</option>
-              ))}
-            </select>
+              onChange={setSelectedSupplier}
+              placeholder="Select Supplier"
+              searchable
+              emptyMessage="No suppliers found."
+              options={[
+                { value: '', label: 'Select Supplier' },
+                ...suppliers.map((supplier) => ({
+                  value: supplier.id,
+                  label: `${supplier.name} (Bal: ${supplier.balance})`,
+                  keywords: `${supplier.contactPerson || ''} ${supplier.phone || ''} ${supplier.email || ''}`,
+                })),
+              ]}
+              buttonClassName="rounded-lg"
+            />
             <p className="text-xs text-zinc-500">Suppliers track where incoming stock came from and how much is payable.</p>
           </div>
 
-          <div className="bg-white p-4 rounded-xl shadow-sm border border-gray-100 space-y-3">
-            <div className="flex items-center justify-between gap-3">
-              <label className="block text-sm font-medium text-gray-700">Destination Location</label>
-              <button
-                type="button"
-                onClick={() => setShowLocationModal(true)}
-                className="text-xs font-semibold text-orange-600 hover:text-orange-700"
-              >
-                + Add Location
-              </button>
+          {multiLocationEnabled && (
+            <div className="bg-white p-4 rounded-xl shadow-sm border border-gray-100 space-y-3">
+              <div className="flex items-center justify-between gap-3">
+                <label className="block text-sm font-medium text-gray-700">Destination Location</label>
+                <button
+                  type="button"
+                  onClick={() => setShowLocationModal(true)}
+                  className="text-xs font-semibold text-orange-600 hover:text-orange-700"
+                >
+                  + Add Location
+                </button>
+              </div>
+              <AppSelect
+                value={selectedLocation}
+                onChange={setSelectedLocation}
+                placeholder="Select Location"
+                options={[
+                  { value: '', label: 'Select Location' },
+                  ...locations.map((location) => ({
+                    value: location.id,
+                    label: `${location.name} (${location.type})`,
+                  })),
+                ]}
+                buttonClassName="rounded-lg"
+              />
+              <p className="text-xs text-zinc-500">Examples: Main Warehouse, Cold Storage, Return Holding, Backup Store.</p>
             </div>
-            <select
-              value={selectedLocation}
-              onChange={(e) => setSelectedLocation(e.target.value)}
-              className="w-full p-2 border rounded-lg focus:ring-2 focus:ring-blue-500 outline-none"
-              required
-            >
-              <option value="">Select Location</option>
-              {locations.map(l => (
-                <option key={l.id} value={l.id}>{l.name} ({l.type})</option>
-              ))}
-            </select>
-            <p className="text-xs text-zinc-500">Examples: Main Warehouse, Cold Storage, Return Holding, Backup Store.</p>
-          </div>
+          )}
         </div>
 
         <div className="bg-white p-4 rounded-xl shadow-sm border border-gray-100">
+          <div className="mb-3 flex items-center justify-between gap-3">
+            <label className="block text-sm font-medium text-gray-700">Items</label>
+            <button
+              type="button"
+              onClick={openItemModal}
+              className="text-xs font-semibold text-orange-600 hover:text-orange-700"
+            >
+              + Add Item
+            </button>
+          </div>
           <div className="relative mb-4">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 w-4 h-4" />
             <input
@@ -333,32 +409,58 @@ export const CreatePurchasePage: React.FC = () => {
               <div className="flex gap-2">
                 <button
                   type="button"
-                  onClick={() => setPaymentType('cash')}
+                  onClick={() => {
+                    setPaymentType('cash');
+                    setPaidAmount(totalAmount);
+                  }}
                   className={`flex-1 py-2 rounded-lg border ${paymentType === 'cash' ? 'bg-blue-50 border-blue-500 text-blue-700' : 'bg-white border-gray-200'}`}
                 >
-                  Cash
+                  Paid in Full
                 </button>
                 <button
                   type="button"
-                  onClick={() => setPaymentType('credit')}
+                  onClick={() => {
+                    setPaymentType('credit');
+                    setPaidAmount(current => Math.min(current, totalAmount));
+                  }}
                   className={`flex-1 py-2 rounded-lg border ${paymentType === 'credit' ? 'bg-blue-50 border-blue-500 text-blue-700' : 'bg-white border-gray-200'}`}
                 >
-                  Credit
+                  Partial / Credit
                 </button>
               </div>
             </div>
-            {paymentType === 'credit' && (
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Paid Amount</label>
-                <input
-                  type="number"
-                  min="0"
-                  value={paidAmount}
-                  onChange={(e) => setPaidAmount(Number(e.target.value))}
-                  className="w-full p-2 border rounded-lg"
-                />
-              </div>
-            )}
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Paid Amount Now</label>
+              <input
+                type="number"
+                min="0"
+                max={totalAmount}
+                value={paymentType === 'cash' ? totalAmount : paidAmount}
+                onChange={(e) => {
+                  const nextValue = Math.min(Math.max(Number(e.target.value), 0), totalAmount);
+                  setPaidAmount(nextValue);
+                  setPaymentType(nextValue >= totalAmount ? 'cash' : 'credit');
+                }}
+                disabled={paymentType === 'cash'}
+                className="w-full p-2 border rounded-lg disabled:bg-zinc-100 disabled:text-zinc-500"
+              />
+              <p className="mt-1 text-xs text-zinc-500">
+                {paymentType === 'cash'
+                  ? 'Full amount will be marked as paid.'
+                  : 'Enter the amount paid now. The remaining amount will be saved as supplier credit.'}
+              </p>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-2 gap-3 rounded-xl border border-zinc-200 bg-zinc-50 p-3">
+            <div>
+              <p className="text-[11px] font-bold uppercase tracking-wide text-zinc-400">Paid Now</p>
+              <p className="text-lg font-bold text-green-600">{normalizedPaidAmount.toFixed(2)}</p>
+            </div>
+            <div>
+              <p className="text-[11px] font-bold uppercase tracking-wide text-zinc-400">Due Later</p>
+              <p className={`text-lg font-bold ${outstandingAmount > 0 ? 'text-orange-600' : 'text-zinc-900'}`}>{outstandingAmount.toFixed(2)}</p>
+            </div>
           </div>
 
           <div>
@@ -448,7 +550,7 @@ export const CreatePurchasePage: React.FC = () => {
       </AnimatePresence>
 
       <AnimatePresence>
-        {showLocationModal && (
+        {showLocationModal && multiLocationEnabled && (
           <EntityModal title="Add Destination Location" onClose={() => setShowLocationModal(false)}>
             <form onSubmit={handleCreateLocation} className="space-y-4">
               <div>
@@ -463,17 +565,18 @@ export const CreatePurchasePage: React.FC = () => {
               </div>
               <div>
                 <label className="block text-xs font-bold uppercase text-zinc-400 mb-1">Type</label>
-                <select
+                <AppSelect
                   value={locationForm.type}
-                  onChange={(e) => setLocationForm({ ...locationForm, type: e.target.value as InventoryLocation['type'] })}
-                  className="w-full px-4 py-2 border rounded-xl"
-                >
-                  <option value="warehouse">Warehouse</option>
-                  <option value="cold-storage">Cold Storage</option>
-                  <option value="return-holding">Return Holding</option>
-                  <option value="damaged-zone">Damaged Zone</option>
-                  <option value="custom">Custom</option>
-                </select>
+                  onChange={(value) => setLocationForm({ ...locationForm, type: value as InventoryLocation['type'] })}
+                  placeholder="Select Type"
+                  options={[
+                    { value: 'warehouse', label: 'Warehouse' },
+                    { value: 'cold-storage', label: 'Cold Storage' },
+                    { value: 'return-holding', label: 'Return Holding' },
+                    { value: 'damaged-zone', label: 'Damaged Zone' },
+                    { value: 'custom', label: 'Custom' },
+                  ]}
+                />
               </div>
               <label className="flex items-center gap-3 rounded-xl border border-zinc-200 p-3">
                 <input
@@ -489,6 +592,111 @@ export const CreatePurchasePage: React.FC = () => {
                 className="w-full py-3 rounded-xl bg-orange-500 text-white font-semibold disabled:opacity-50"
               >
                 {setupSubmitting ? 'Saving...' : 'Save Location'}
+              </button>
+            </form>
+          </EntityModal>
+        )}
+      </AnimatePresence>
+
+      <AnimatePresence>
+        {showItemModal && (
+          <EntityModal title="Add Item" onClose={() => setShowItemModal(false)}>
+            <form onSubmit={handleCreateItem} className="space-y-4">
+              <div>
+                <label className="mb-1 block text-xs font-bold uppercase text-zinc-400">Item Name</label>
+                <input
+                  required
+                  value={itemForm.name}
+                  onChange={(e) => setItemForm({ ...itemForm, name: e.target.value })}
+                  className="w-full rounded-xl border px-4 py-2"
+                  placeholder="e.g. Plate 10"
+                />
+              </div>
+              <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                <div>
+                  <label className="mb-1 block text-xs font-bold uppercase text-zinc-400">SKU</label>
+                  <input
+                    value={itemForm.sku}
+                    onChange={(e) => setItemForm({ ...itemForm, sku: e.target.value })}
+                    className="w-full rounded-xl border px-4 py-2"
+                    placeholder="Optional"
+                  />
+                </div>
+                <div>
+                  <label className="mb-1 block text-xs font-bold uppercase text-zinc-400">Category</label>
+                  <AppSelect
+                    value={itemForm.categoryId || ''}
+                    onChange={(value) => setItemForm({ ...itemForm, categoryId: value })}
+                    placeholder="Select Category"
+                    options={[
+                      { value: '', label: 'Select Category' },
+                      ...categories.map((category) => ({
+                        value: category.id,
+                        label: category.name,
+                      })),
+                    ]}
+                  />
+                </div>
+                <div>
+                  <label className="mb-1 block text-xs font-bold uppercase text-zinc-400">Unit</label>
+                  <input
+                    required
+                    value={itemForm.unit}
+                    onChange={(e) => setItemForm({ ...itemForm, unit: e.target.value })}
+                    className="w-full rounded-xl border px-4 py-2"
+                  />
+                </div>
+                <div>
+                  <label className="mb-1 block text-xs font-bold uppercase text-zinc-400">Reorder Level</label>
+                  <input
+                    required
+                    min="0"
+                    type="number"
+                    value={itemForm.reorderThreshold}
+                    onChange={(e) => setItemForm({ ...itemForm, reorderThreshold: Number(e.target.value) })}
+                    className="w-full rounded-xl border px-4 py-2"
+                  />
+                </div>
+                <div>
+                  <label className="mb-1 block text-xs font-bold uppercase text-zinc-400">Base Cost</label>
+                  <input
+                    required
+                    min="0"
+                    step="0.01"
+                    type="number"
+                    value={itemForm.basePrice}
+                    onChange={(e) => setItemForm({ ...itemForm, basePrice: Number(e.target.value) })}
+                    className="w-full rounded-xl border px-4 py-2"
+                  />
+                </div>
+                <div>
+                  <label className="mb-1 block text-xs font-bold uppercase text-zinc-400">Selling Price</label>
+                  <input
+                    required
+                    min="0"
+                    step="0.01"
+                    type="number"
+                    value={itemForm.sellingPrice}
+                    onChange={(e) => setItemForm({ ...itemForm, sellingPrice: Number(e.target.value) })}
+                    className="w-full rounded-xl border px-4 py-2"
+                  />
+                </div>
+              </div>
+              <div>
+                <label className="mb-1 block text-xs font-bold uppercase text-zinc-400">Description</label>
+                <textarea
+                  value={itemForm.description}
+                  onChange={(e) => setItemForm({ ...itemForm, description: e.target.value })}
+                  className="min-h-24 w-full rounded-xl border px-4 py-2"
+                  placeholder="Optional notes about pack size, brand, or handling"
+                />
+              </div>
+              <button
+                type="submit"
+                disabled={setupSubmitting}
+                className="w-full rounded-xl bg-orange-500 py-3 font-semibold text-white disabled:opacity-50"
+              >
+                {setupSubmitting ? 'Saving...' : 'Save Item'}
               </button>
             </form>
           </EntityModal>

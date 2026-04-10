@@ -5,10 +5,21 @@ import { useAuth } from '../contexts';
 import { saleService } from '../services/saleService';
 import { inventoryService } from '../services/inventoryService';
 import { Customer, Item, SaleLine, InventoryLocation, StockSummary } from '../types';
-import { Plus, Trash2, Search, Loader2, ShoppingCart, ArrowLeft } from 'lucide-react';
-import { motion } from 'motion/react';
+import { Plus, Trash2, Search, Loader2, ShoppingCart, X } from 'lucide-react';
+import { AnimatePresence, motion } from 'motion/react';
 import { Link } from 'react-router-dom';
 import { useNotifications } from '../notifications';
+import { AppSelect } from '../components/AppSelect';
+
+const emptyCustomerForm: Partial<Customer> = {
+  name: '',
+  shopName: '',
+  phone: '',
+  email: '',
+  address: '',
+  route: '',
+  balance: 0,
+};
 
 export const CreateSalePage: React.FC = () => {
   const { currentOrg } = useTenancy();
@@ -29,6 +40,10 @@ export const CreateSalePage: React.FC = () => {
   const [notes, setNotes] = useState('');
   const [loading, setLoading] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
+  const [showCustomerModal, setShowCustomerModal] = useState(false);
+  const [customerForm, setCustomerForm] = useState<Partial<Customer>>(emptyCustomerForm);
+  const [setupSubmitting, setSetupSubmitting] = useState(false);
+  const multiLocationEnabled = currentOrg?.settings?.multiLocationEnabled ?? false;
 
   useEffect(() => {
     if (currentOrg) {
@@ -148,11 +163,33 @@ export const CreateSalePage: React.FC = () => {
       success('Sale recorded successfully');
       setSaleItems([]);
       setSelectedCustomer('');
+      setPaymentType('cash');
+      setPaidAmount(0);
+      setNotes('');
     } catch (error: any) {
       console.error(error);
       notifyError(error.message || 'Failed to record sale');
     } finally {
       setLoading(false);
+    }
+  };
+
+  const handleCreateCustomer = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!currentOrg) return;
+    setSetupSubmitting(true);
+    try {
+      const customer = await saleService.createCustomer(currentOrg.id, customerForm);
+      setCustomers(prev => [...prev, customer].sort((a, b) => a.name.localeCompare(b.name)));
+      setSelectedCustomer(customer.id);
+      setShowCustomerModal(false);
+      setCustomerForm(emptyCustomerForm);
+      success('Customer added successfully');
+    } catch (error: any) {
+      console.error(error);
+      notifyError(error.message || 'Failed to add customer');
+    } finally {
+      setSetupSubmitting(false);
     }
   };
 
@@ -169,34 +206,52 @@ export const CreateSalePage: React.FC = () => {
       <form onSubmit={handleSubmit} className="space-y-6">
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           <div className="bg-white p-4 rounded-xl shadow-sm border border-gray-100">
-            <label className="block text-sm font-medium text-gray-700 mb-1">Customer</label>
-            <select
+            <div className="mb-1 flex items-center justify-between gap-3">
+              <label className="block text-sm font-medium text-gray-700">Customer</label>
+              <button
+                type="button"
+                onClick={() => setShowCustomerModal(true)}
+                className="text-xs font-semibold text-orange-600 hover:text-orange-700"
+              >
+                + Add Customer
+              </button>
+            </div>
+            <AppSelect
               value={selectedCustomer}
-              onChange={(e) => setSelectedCustomer(e.target.value)}
-              className="w-full p-2 border rounded-lg focus:ring-2 focus:ring-blue-500 outline-none"
-              required
-            >
-              <option value="">Select Customer</option>
-              {customers.map(c => (
-                <option key={c.id} value={c.id}>{c.name} (Bal: {c.balance})</option>
-              ))}
-            </select>
+              onChange={setSelectedCustomer}
+              placeholder="Select Customer"
+              searchable
+              emptyMessage="No customers found."
+              options={[
+                { value: '', label: 'Select Customer' },
+                ...customers.map((customer) => ({
+                  value: customer.id,
+                  label: `${customer.name} (Bal: ${customer.balance})`,
+                  keywords: `${customer.shopName || ''} ${customer.phone || ''} ${customer.route || ''}`,
+                })),
+              ]}
+              buttonClassName="rounded-lg"
+            />
           </div>
 
-          <div className="bg-white p-4 rounded-xl shadow-sm border border-gray-100">
-            <label className="block text-sm font-medium text-gray-700 mb-1">Source Location</label>
-            <select
-              value={selectedLocation}
-              onChange={(e) => setSelectedLocation(e.target.value)}
-              className="w-full p-2 border rounded-lg focus:ring-2 focus:ring-blue-500 outline-none"
-              required
-            >
-              <option value="">Select Location</option>
-              {locations.map(l => (
-                <option key={l.id} value={l.id}>{l.name} ({l.type})</option>
-              ))}
-            </select>
-          </div>
+          {multiLocationEnabled && (
+            <div className="bg-white p-4 rounded-xl shadow-sm border border-gray-100">
+              <label className="block text-sm font-medium text-gray-700 mb-1">Source Location</label>
+              <AppSelect
+                value={selectedLocation}
+                onChange={setSelectedLocation}
+                placeholder="Select Location"
+                options={[
+                  { value: '', label: 'Select Location' },
+                  ...locations.map((location) => ({
+                    value: location.id,
+                    label: `${location.name} (${location.type})`,
+                  })),
+                ]}
+                buttonClassName="rounded-lg"
+              />
+            </div>
+          )}
         </div>
 
         <div className="bg-white p-4 rounded-xl shadow-sm border border-gray-100">
@@ -339,6 +394,106 @@ export const CreateSalePage: React.FC = () => {
           Confirm Sale
         </button>
       </form>
+
+      <AnimatePresence>
+        {showCustomerModal && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              onClick={() => setShowCustomerModal(false)}
+              className="absolute inset-0 bg-zinc-900/40 backdrop-blur-sm"
+            />
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95, y: 20 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.95, y: 20 }}
+              className="relative w-full max-w-lg overflow-hidden rounded-3xl bg-white shadow-2xl"
+            >
+              <div className="flex items-center justify-between border-b border-zinc-100 p-6">
+                <h3 className="text-xl font-bold text-zinc-900">Add New Customer</h3>
+                <button onClick={() => setShowCustomerModal(false)} className="rounded-full p-2 hover:bg-zinc-100 transition-colors">
+                  <X className="w-5 h-5 text-zinc-400" />
+                </button>
+              </div>
+
+              <form onSubmit={handleCreateCustomer} className="space-y-4 p-6">
+                <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                  <div className="sm:col-span-2">
+                    <label className="mb-1 block text-xs font-bold uppercase text-zinc-400">Customer Name</label>
+                    <input
+                      required
+                      value={customerForm.name}
+                      onChange={(e) => setCustomerForm({ ...customerForm, name: e.target.value })}
+                      className="w-full rounded-xl border px-4 py-2"
+                    />
+                  </div>
+                  <div className="sm:col-span-2">
+                    <label className="mb-1 block text-xs font-bold uppercase text-zinc-400">Shop Name</label>
+                    <input
+                      value={customerForm.shopName}
+                      onChange={(e) => setCustomerForm({ ...customerForm, shopName: e.target.value })}
+                      className="w-full rounded-xl border px-4 py-2"
+                    />
+                  </div>
+                  <div>
+                    <label className="mb-1 block text-xs font-bold uppercase text-zinc-400">Phone</label>
+                    <input
+                      value={customerForm.phone}
+                      onChange={(e) => setCustomerForm({ ...customerForm, phone: e.target.value })}
+                      className="w-full rounded-xl border px-4 py-2"
+                    />
+                  </div>
+                  <div>
+                    <label className="mb-1 block text-xs font-bold uppercase text-zinc-400">Email</label>
+                    <input
+                      type="email"
+                      value={customerForm.email}
+                      onChange={(e) => setCustomerForm({ ...customerForm, email: e.target.value })}
+                      className="w-full rounded-xl border px-4 py-2"
+                    />
+                  </div>
+                  <div>
+                    <label className="mb-1 block text-xs font-bold uppercase text-zinc-400">Route</label>
+                    <input
+                      value={customerForm.route}
+                      onChange={(e) => setCustomerForm({ ...customerForm, route: e.target.value })}
+                      className="w-full rounded-xl border px-4 py-2"
+                    />
+                  </div>
+                  <div>
+                    <label className="mb-1 block text-xs font-bold uppercase text-zinc-400">Opening Balance</label>
+                    <input
+                      type="number"
+                      min="0"
+                      value={customerForm.balance}
+                      onChange={(e) => setCustomerForm({ ...customerForm, balance: Number(e.target.value) })}
+                      className="w-full rounded-xl border px-4 py-2"
+                    />
+                  </div>
+                  <div className="sm:col-span-2">
+                    <label className="mb-1 block text-xs font-bold uppercase text-zinc-400">Address</label>
+                    <textarea
+                      value={customerForm.address}
+                      onChange={(e) => setCustomerForm({ ...customerForm, address: e.target.value })}
+                      className="min-h-24 w-full rounded-xl border px-4 py-2"
+                    />
+                  </div>
+                </div>
+
+                <button
+                  type="submit"
+                  disabled={setupSubmitting}
+                  className="w-full rounded-xl bg-orange-500 py-3 font-semibold text-white disabled:opacity-50"
+                >
+                  {setupSubmitting ? 'Saving...' : 'Save Customer'}
+                </button>
+              </form>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
     </div>
   );
 };

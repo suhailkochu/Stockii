@@ -5,6 +5,7 @@ import { Item, InventoryLocation } from '../types';
 import { Search, Trash2, Loader2, AlertTriangle } from 'lucide-react';
 import { motion } from 'motion/react';
 import { useNotifications } from '../notifications';
+import { AppSelect } from '../components/AppSelect';
 
 export default function DamagesPage() {
   const { currentOrg } = useTenancy();
@@ -20,6 +21,7 @@ export default function DamagesPage() {
   const [reason, setReason] = useState('');
   const [notes, setNotes] = useState('');
   const [loading, setLoading] = useState(false);
+  const multiLocationEnabled = currentOrg?.settings?.multiLocationEnabled ?? false;
   const [searchTerm, setSearchTerm] = useState('');
 
   useEffect(() => {
@@ -123,20 +125,23 @@ export default function DamagesPage() {
           )}
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-            <div className="space-y-2">
-              <label className="block text-xs font-bold text-zinc-400 uppercase">Location of Damage</label>
-              <select
-                value={selectedLocation}
-                onChange={(e) => setSelectedLocation(e.target.value)}
-                className="w-full p-2 bg-zinc-50 border border-zinc-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-red-500"
-                required
-              >
-                <option value="">Select Location</option>
-                {locations.map(l => (
-                  <option key={l.id} value={l.id}>{l.name} ({l.type})</option>
-                ))}
-              </select>
-            </div>
+            {multiLocationEnabled && (
+              <div className="space-y-2">
+                <label className="block text-xs font-bold text-zinc-400 uppercase">Location of Damage</label>
+                <AppSelect
+                  value={selectedLocation}
+                  onChange={setSelectedLocation}
+                  placeholder="Select Location"
+                  options={[
+                    { value: '', label: 'Select Location' },
+                    ...locations.map((location) => ({
+                      value: location.id,
+                      label: `${location.name} (${location.type})`,
+                    })),
+                  ]}
+                />
+              </div>
+            )}
 
             <div className="space-y-2">
               <label className="block text-xs font-bold text-zinc-400 uppercase">Quantity Damaged</label>
@@ -153,19 +158,19 @@ export default function DamagesPage() {
 
           <div className="space-y-2">
             <label className="block text-xs font-bold text-zinc-400 uppercase">Primary Reason</label>
-            <select
+            <AppSelect
               value={reason}
-              onChange={(e) => setReason(e.target.value)}
-              className="w-full p-2 bg-zinc-50 border border-zinc-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-red-500"
-              required
-            >
-              <option value="">Select Reason</option>
-              <option value="Spoilage/Expired">Spoilage / Expired</option>
-              <option value="Physical Damage">Physical Damage</option>
-              <option value="Theft/Loss">Theft / Loss</option>
-              <option value="Quality Issue">Quality Issue</option>
-              <option value="Other">Other</option>
-            </select>
+              onChange={setReason}
+              placeholder="Select Reason"
+              options={[
+                { value: '', label: 'Select Reason' },
+                { value: 'Spoilage/Expired', label: 'Spoilage / Expired' },
+                { value: 'Physical Damage', label: 'Physical Damage' },
+                { value: 'Theft/Loss', label: 'Theft / Loss' },
+                { value: 'Quality Issue', label: 'Quality Issue' },
+                { value: 'Other', label: 'Other' },
+              ]}
+            />
           </div>
 
           <div className="space-y-2">

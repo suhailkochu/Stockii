@@ -7,6 +7,9 @@ import { format } from 'date-fns';
 import { useTenancy } from '../contexts';
 import { useNotifications } from '../notifications';
 import { AnimatePresence, motion } from 'motion/react';
+import { formatCurrency } from '../utils/currency';
+import { TableDisplayToggle } from '../components/TableDisplayToggle';
+import { useOrgTableDisplayMode } from '../hooks/useOrgTableDisplayMode';
 
 export default function SalesPage() {
   const { currentOrg } = useTenancy();
@@ -20,6 +23,7 @@ export default function SalesPage() {
   const [paymentType, setPaymentType] = useState<'cash' | 'credit'>('cash');
   const [notes, setNotes] = useState('');
   const [saving, setSaving] = useState(false);
+  const { tableDisplayMode, setTableDisplayMode, savingTableDisplayMode } = useOrgTableDisplayMode();
 
   useEffect(() => {
     if (currentOrg) {
@@ -98,7 +102,7 @@ export default function SalesPage() {
         </Link>
       </header>
 
-      <div className="flex flex-col sm:flex-row gap-4">
+      <div className="flex flex-col gap-4 lg:flex-row lg:items-center">
         <div className="relative flex-1">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-zinc-400" />
           <input
@@ -113,9 +117,15 @@ export default function SalesPage() {
           <Filter className="w-4 h-4" />
           Filters
         </button>
+        <TableDisplayToggle
+          value={tableDisplayMode}
+          onChange={setTableDisplayMode}
+          disabled={savingTableDisplayMode}
+        />
       </div>
 
       <div className="bg-white border border-zinc-200 rounded-2xl overflow-hidden shadow-sm">
+        {tableDisplayMode === 'table' ? (
         <div className="overflow-x-auto">
           <table className="w-full text-left border-collapse">
             <thead>
@@ -159,9 +169,9 @@ export default function SalesPage() {
                       </div>
                     </td>
                     <td className="px-6 py-4 text-right">
-                      <p className="text-sm font-bold text-zinc-900">{currentOrg?.settings.currency} {sale.totalAmount.toFixed(2)}</p>
+                      <p className="text-sm font-bold text-zinc-900">{formatCurrency(sale.totalAmount, currentOrg?.settings.currency)}</p>
                       <p className="text-[10px] text-zinc-400 uppercase font-bold tracking-tight">
-                        Paid {sale.paidAmount.toFixed(2)}
+                        Paid {formatCurrency(sale.paidAmount, currentOrg?.settings.currency)}
                       </p>
                     </td>
                     <td className="px-6 py-4 text-center">
@@ -196,6 +206,74 @@ export default function SalesPage() {
             </tbody>
           </table>
         </div>
+        ) : (
+          <div className="divide-y divide-zinc-100">
+            {filteredSales.length === 0 ? (
+              <div className="px-6 py-12 text-center text-zinc-500">No sales found.</div>
+            ) : (
+              filteredSales.map((sale) => {
+                const dueAmount = Math.max(sale.totalAmount - sale.paidAmount, 0);
+                return (
+                  <div key={sale.id} className="p-4 sm:p-5">
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="flex items-center gap-3">
+                        <div className="w-10 h-10 rounded-xl bg-orange-50 flex items-center justify-center text-orange-500">
+                          <ShoppingCart className="w-4 h-4" />
+                        </div>
+                        <div>
+                          <p className="text-sm font-bold text-zinc-900">{getCustomerName(sale.customerId)}</p>
+                          <p className="text-xs font-mono font-bold text-zinc-400">#{sale.id.slice(-6).toUpperCase()}</p>
+                        </div>
+                      </div>
+                      <span className={`inline-flex px-2 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider ${
+                        sale.paymentType === 'cash' ? 'bg-green-100 text-green-700' : 'bg-orange-100 text-orange-700'
+                      }`}>
+                        {sale.paymentType}
+                      </span>
+                    </div>
+                    <div className="mt-4 grid grid-cols-2 gap-3 rounded-2xl bg-zinc-50 p-3">
+                      <div>
+                        <p className="text-[10px] font-mono uppercase tracking-wider text-zinc-400">Date</p>
+                        <p className="mt-1 text-sm text-zinc-700">{format(sale.timestamp, 'MMM dd, yyyy HH:mm')}</p>
+                      </div>
+                      <div>
+                        <p className="text-[10px] font-mono uppercase tracking-wider text-zinc-400">Total</p>
+                        <p className="mt-1 text-sm font-bold text-zinc-900">{formatCurrency(sale.totalAmount, currentOrg?.settings.currency)}</p>
+                      </div>
+                      <div>
+                        <p className="text-[10px] font-mono uppercase tracking-wider text-zinc-400">Paid</p>
+                        <p className="mt-1 text-sm font-bold text-green-600">{formatCurrency(sale.paidAmount, currentOrg?.settings.currency)}</p>
+                      </div>
+                      <div>
+                        <p className="text-[10px] font-mono uppercase tracking-wider text-zinc-400">Due</p>
+                        <p className={`mt-1 text-sm font-bold ${dueAmount > 0 ? 'text-orange-600' : 'text-zinc-400'}`}>
+                          {formatCurrency(dueAmount, currentOrg?.settings.currency)}
+                        </p>
+                      </div>
+                    </div>
+                    <div className="mt-4 flex justify-end gap-2">
+                      <button
+                        type="button"
+                        onClick={() => openEditModal(sale)}
+                        className="inline-flex items-center gap-2 rounded-xl border border-zinc-200 px-3 py-2 text-sm font-medium text-zinc-700 hover:bg-zinc-50 transition-colors"
+                      >
+                        <Pencil className="w-4 h-4" />
+                        Edit
+                      </button>
+                      <Link
+                        to={`/sales/${sale.id}/invoice`}
+                        className="inline-flex items-center gap-2 rounded-xl bg-orange-500 px-3 py-2 text-sm font-medium text-white hover:bg-orange-600 transition-colors"
+                      >
+                        <FileText className="w-4 h-4" />
+                        Invoice
+                      </Link>
+                    </div>
+                  </div>
+                );
+              })
+            )}
+          </div>
+        )}
       </div>
 
       <AnimatePresence>

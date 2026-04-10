@@ -3,6 +3,8 @@ import { useTenancy } from '../contexts';
 import { inventoryService } from '../services/inventoryService';
 import { InventoryTransaction, Item, InventoryLocation } from '../types';
 import { Search, Filter, ArrowUpRight, ArrowDownLeft, RefreshCw, AlertTriangle, Package } from 'lucide-react';
+import { TableDisplayToggle } from '../components/TableDisplayToggle';
+import { useOrgTableDisplayMode } from '../hooks/useOrgTableDisplayMode';
 
 export default function TransactionsPage() {
   const { currentOrg } = useTenancy();
@@ -11,6 +13,7 @@ export default function TransactionsPage() {
   const [locations, setLocations] = useState<InventoryLocation[]>([]);
   const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
+  const { tableDisplayMode, setTableDisplayMode, savingTableDisplayMode } = useOrgTableDisplayMode();
 
   useEffect(() => {
     if (currentOrg) {
@@ -96,7 +99,7 @@ export default function TransactionsPage() {
         </div>
       </header>
 
-      <div className="flex flex-col sm:flex-row gap-4">
+      <div className="flex flex-col gap-4 lg:flex-row lg:items-center">
         <div className="relative flex-1">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-zinc-400" />
           <input
@@ -111,9 +114,15 @@ export default function TransactionsPage() {
           <Filter className="w-4 h-4" />
           {filteredTransactions.length} entries
         </div>
+        <TableDisplayToggle
+          value={tableDisplayMode}
+          onChange={setTableDisplayMode}
+          disabled={savingTableDisplayMode}
+        />
       </div>
 
       <div className="bg-white border border-zinc-200 rounded-2xl overflow-hidden shadow-sm">
+        {tableDisplayMode === 'table' ? (
         <div className="overflow-x-auto">
           <table className="w-full text-left border-collapse">
             <thead>
@@ -176,6 +185,46 @@ export default function TransactionsPage() {
             </tbody>
           </table>
         </div>
+        ) : (
+          <div className="divide-y divide-zinc-100">
+            {filteredTransactions.length === 0 ? (
+              <div className="px-6 py-12 text-center text-zinc-500">No transactions recorded yet.</div>
+            ) : (
+              filteredTransactions.map((tx) => {
+                const item = items.find(i => i.id === tx.itemId);
+                const signedQuantity = getSignedQuantity(tx);
+                return (
+                  <div key={tx.id} className="p-4 sm:p-5">
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="flex items-center gap-3">
+                        <div className="w-10 h-10 rounded-xl bg-zinc-50 flex items-center justify-center">
+                          {getTxIcon(tx.type)}
+                        </div>
+                        <div>
+                          <p className="text-sm font-bold text-zinc-900">{item?.name || 'Unknown Item'}</p>
+                          <p className="text-xs font-mono text-zinc-400">{item?.sku || 'NO-SKU'}</p>
+                        </div>
+                      </div>
+                      <div className="text-right">
+                        <p className={`text-sm font-bold ${signedQuantity >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                          {signedQuantity >= 0 ? '+' : ''}{signedQuantity} {item?.unit || ''}
+                        </p>
+                        <p className="text-[10px] font-bold uppercase tracking-wider text-zinc-400">{getTxLabel(tx.type)}</p>
+                      </div>
+                    </div>
+                    <div className="mt-4 rounded-2xl bg-zinc-50 p-3 space-y-2">
+                      <p className="text-xs text-zinc-600">{new Date(tx.timestamp).toLocaleString()}</p>
+                      <p className="text-sm text-zinc-600">From: <span className="font-medium text-zinc-900">{getLocationName(tx.sourceLocationId)}</span></p>
+                      <p className="text-sm text-zinc-600">To: <span className="font-medium text-zinc-900">{getLocationName(tx.destinationLocationId)}</span></p>
+                      <p className="text-sm text-zinc-600">Reference: <span className="font-mono text-zinc-900">{tx.referenceId || '-'}</span></p>
+                      {tx.notes && <p className="text-xs italic text-zinc-500">{tx.notes}</p>}
+                    </div>
+                  </div>
+                );
+              })
+            )}
+          </div>
+        )}
       </div>
     </div>
   );

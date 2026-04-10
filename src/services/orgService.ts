@@ -46,9 +46,11 @@ export const orgService = {
       ownerId,
       createdAt: Date.now(),
       settings: {
-        currency: 'USD',
+        currency: 'INR',
         taxEnabled: false,
         taxRate: 0,
+        multiLocationEnabled: false,
+        tableDisplayMode: 'table',
         modules: {
           purchases: true,
           sales: true,

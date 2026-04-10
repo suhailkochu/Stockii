@@ -133,6 +133,18 @@ export function TenancyProvider({ children }: { children: React.ReactNode }) {
     return () => unsubscribe();
   }, [user]);
 
+  useEffect(() => {
+    if (!currentOrg?.id) return;
+
+    const orgRef = doc(db, 'organizations', currentOrg.id);
+    return onSnapshot(orgRef, (snapshot) => {
+      if (!snapshot.exists()) return;
+      const org = snapshot.data() as Organization;
+      setCurrentOrg(org);
+      setOrgs((previous) => previous.map((entry) => (entry.id === org.id ? org : entry)));
+    });
+  }, [currentOrg?.id]);
+
   // Sync membership when currentOrg or memberships change
   useEffect(() => {
     if (currentOrg && memberships.length > 0) {
@@ -156,9 +168,11 @@ export function TenancyProvider({ children }: { children: React.ReactNode }) {
       ownerId: user.uid,
       createdAt: Date.now(),
       settings: {
-        currency: 'USD',
+        currency: 'INR',
         taxEnabled: false,
         taxRate: 0,
+        multiLocationEnabled: false,
+        tableDisplayMode: 'table',
         modules: {
           purchases: true,
           sales: true,

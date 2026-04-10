@@ -93,6 +93,8 @@ export interface OrganizationSettings {
   currency: string;
   taxEnabled: boolean;
   taxRate: number;
+  multiLocationEnabled: boolean;
+  tableDisplayMode: 'table' | 'cards';
   modules: {
     purchases: boolean;
     sales: boolean;
@@ -251,6 +253,8 @@ export interface PaymentRecord {
   entityType: 'customer' | 'supplier';
   entityId: string;
   amount: number;
+  direction?: 'payment_received' | 'balance_added' | 'write_off' | 'payment_made';
+  balanceAfter?: number;
   paymentMethod: 'cash' | 'bank' | 'cheque';
   referenceId?: string; // Sale ID or Purchase ID if applicable
   timestamp: number;
